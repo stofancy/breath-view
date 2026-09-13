@@ -53,3 +53,9 @@
 `tools/export_comparison_baseline.py --output <本地私有JSON路径> <日期...>` 从已有快照导出事件、摘要分钟、保留波形秒数、重复时间戳、连续记录段和通道统计，不读取或写入 SD 卡。输出仅代表息览，不能当作 OSCAR 通过验证的证明。
 
 本轮选取 2026-09-11（已结算且有波形）、09-05（无波形）、09-12（未结算）、08-07（仅保留 86 秒波形）、09-06（有重复时间戳和间隙）。私有结果保存在 `/home/ztmdsbt/.cache/breath-view-reference/comparison-baseline-detailed.json`，不提交真实治疗数据。连续记录段不等于开关机或醒来次数。
+
+## 开发版时长口径的源码风险
+
+本地 `oscar-sql` 固定版本的 `BmcData::ReadDateSession()`（`bmcDataParsing.cpp`）会将最后一个波形段结束时间至少延长到“最后一段开始 + 整天 USR 分钟数”；前面的段仍保留。legacy loader 的 `findStableEndMs()` 直接使用该结束时间，作为 MaskOn 的结束。多段记录可能因此重复计入一部分时长。这是源码推导，尚未当作实际 OSCAR 运行缺陷定论。
+
+例如息览 2026-09-11 有三段记录。若 OSCAR 读取相同三段，按上述代码推导的 MaskOn 总时长约 443.87 分钟，USR 为 379 分钟。实际运行对账时要核对段列表和分母，不能仅为匹配 OSCAR 最终指数而改变 USR 分母。该发现不改变息览当前患者判断。
