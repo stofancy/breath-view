@@ -7,6 +7,7 @@ from datetime import datetime
 import numpy as np
 from reader import parse_usr, timestamps, index_waveforms, Dataset, packed_date
 from storage import import_card, load
+from analysis_report import build_report
 
 
 def usr_bytes():
@@ -126,6 +127,7 @@ class ExportTests(unittest.TestCase):
             path=Path(temp)/'test.USR';path.write_bytes(usr_bytes())
             _,days=parse_usr(path)
             app=SimpleNamespace(data=Dataset(temp,{'days':days,'spans':{}}),lock=threading.RLock(),get_context=lambda start,end:{})
+            app.make_report=lambda start,end,locale='zh-CN': build_report(app.data,start,end,app.get_context(start,end),locale=locale)
             server,url=serve(app)
             try:
                 with urllib.request.urlopen(url+'api/export?start=2026-09-12&end=2026-09-12') as response:
