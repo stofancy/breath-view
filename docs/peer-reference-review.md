@@ -47,3 +47,9 @@
 - `/home/ztmdsbt/workspaces/references/oscar-sql`：`53c45136af4ae70fea1188b39da43e813a4a5d67`
 
 两者均来自 `https://gitlab.com/CrimsonNape/` 下对应仓库，与本轮研究引用的版本一致。
+
+## 可重复生成的对账基线
+
+`tools/export_comparison_baseline.py --output <本地私有JSON路径> <日期...>` 从已有快照导出事件、摘要分钟、保留波形秒数、重复时间戳、连续记录段和通道统计，不读取或写入 SD 卡。输出仅代表息览，不能当作 OSCAR 通过验证的证明。
+
+本轮选取 2026-09-11（已结算且有波形）、09-05（无波形）、09-12（未结算）、08-07（仅保留 86 秒波形）、09-06（有重复时间戳和间隙）。私有结果保存在 `/home/ztmdsbt/.cache/breath-view-reference/comparison-baseline-detailed.json`，不提交真实治疗数据。连续记录段不等于开关机或醒来次数。
