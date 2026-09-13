@@ -1,10 +1,50 @@
 'use strict';
 let reportData=null, reportRequest=0, compareMode='previous', reportLoading=false;
 const contextDrafts=new Map();
+let treatmentStatusMessage='';
+const treatmentKinds={mask:'treatment.kind.mask',clinician:'treatment.kind.clinician',comfort:'treatment.kind.comfort',lifestyle:'treatment.kind.lifestyle',illness:'treatment.kind.illness',other:'treatment.kind.other'};
 const contextValue=name=>document.querySelector(`input[name="${name}"]:checked`)?.value||'unknown';
 function setContextValue(name,value){
   const input=document.querySelector(`input[name="${name}"][value="${CSS.escape(value||'unknown')}"]`)||document.querySelector(`input[name="${name}"][value="unknown"]`);
   if(input)input.checked=true;
+}
+function formatStamp(value){return value?String(value).replace('T',' '):'—';}
+function aggregateLabel(value){
+  if(!value)return '';
+  const range=value.start&&value.end?`${value.start} ${t('common.to')} ${value.end}`:'';
+  const days=value.evaluable_days??value.settled_days??value.calendar_days;
+  return `${range}${range&&days!=null?' · ':''}${days!=null?t('treatment.evaluableDays',{days}):''}`||t('treatment.dataWindow');
+}
+function aggregateFrequency(value){return value?.frequency==null?null:Number(value.frequency);}
+function normalizeSleepHours(value){
+  if(value==null||value==='')return null;
+  const parsed=Number(value);
+  return Number.isFinite(parsed)?parsed:null;
+}
+function changeComparisonText(change){
+  const c=change.comparison||{},before=aggregateFrequency(c.before),after=aggregateFrequency(c.after);
+  if(c.text)return c.text;
+  const parts=[];
+  if(before!=null&&after!=null){const delta=after-before;parts.push(Math.abs(delta)<0.005?t('report.changeFrequencySimilar'):t('report.changeFrequencyDelta',{direction:delta>0?t('report.increased'):t('report.decreased'),value:fmt(Math.abs(delta),2)}));}
+  if(c.minutes_delta!=null){const delta=Number(c.minutes_delta);parts.push(Math.abs(delta)<0.5?t('report.changeUsageSimilar'):t('report.changeUsageDelta',{direction:delta>0?t('report.increased'):t('report.decreased'),minutes:Math.round(Math.abs(delta))}));}
+  return parts.length?`${parts.join(t('common.listSeparator'))}${t('common.sentenceEnd')}${t('report.changeCausalNote')}`:t('report.changeFallback');
+}
+function renderFreshness(){
+  const r=reportData,p=r.current,v=r.patient||{},f=v.freshness||r.freshness||{};
+  const selected=f.selected_through||null,latest=f.latest_settled||v.latest_settled;
+  $('#patientFreshness').innerHTML=`<strong>${escape(selected?t('report.freshnessCurrent',{date:selected}):t('report.freshnessNone'))}</strong>${latest&&latest!==selected?`<span>${escape(t('report.freshnessLatest',{date:latest}))}</span>`:''}`;
+}
+function renderVariability(){
+  const target=$('#patientVariability'),v=reportData?.patient?.variability;
+  if(!target)return;
+  if(!v){target.textContent=t('report.variabilityNone');return;}
+  const patternKey=`report.variabilityPattern.${v.pattern}`,patternText=t(patternKey),pattern=patternText===patternKey?t('report.variabilityFallback'):patternText;
+  const evaluable=v.evaluable_days??v.settled_days,high=v.high_days??0,short=v.short_days??0;
+  const facts=evaluable!=null?t('report.variabilityFacts',{high,evaluable,short}):'';
+  const explanation=v.text&&v.text!==pattern?`<details class="variability-explain"><summary>${t('report.variabilityExplain')}</summary><p>${escape(v.text)}</p></details>`:'';
+  const dates=Array.isArray(v.review_dates)?v.review_dates.map(item=>typeof item==='string'?item:item?.date).filter(Boolean):[];
+  target.innerHTML=`<span class="variability-copy">${escape(facts||t('report.variabilityFallback'))}</span><span class="variability-pattern">${escape(t('report.variabilityPatternLabel',{pattern,note:t('report.variabilityScreeningNote')}))}</span>${explanation}${dates.length?`<div class="variability-reviews"><span>${t('report.variabilityReview')}</span>${dates.slice(0,5).map(date=>`<button type="button" class="report-date" data-variability-day="${escape(date)}">${escape(date)}</button>`).join('')}${dates.length>5?`<span>${t('report.variabilityMore',{count:dates.length})}</span>`:''}</div>`:''}`;
+  target.querySelectorAll('[data-variability-day]').forEach(button=>button.onclick=()=>openDay(button.dataset.variabilityDay));
 }
 function renderProfessional() {
   const r=reportData,p=r.current,prev=r.previous;
@@ -65,12 +105,13 @@ function renderReport(){
   const r=reportData,p=r.current,v=r.patient,a=v.assessment;
   $('#reportContent').hidden=false;
   $('#patientPeriod').textContent=t('report.periodLabel',{days:p.calendar_days});
+  renderFreshness();
   $('#patientTitle').textContent=v.title;$('#patientDetail').textContent=v.detail;$('#patientBoundary').textContent=v.boundary;
   $('#assessmentReasons').innerHTML=a.reasons.map(reason=>`<li>${escape(reason)}</li>`).join('');
   $('#assessmentConfidence').textContent=a.confidence_note;
   $('#assessmentRules').innerHTML=a.rules.map(rule=>`<li>${escape(rule)}</li>`).join('');
   $('#patientMetrics').innerHTML=`
-    <article class="panel patient-metric"><div>${t('report.metric.frequency')} ${help('frequency')}</div><strong>${fmt(p.frequency,2)} <small>${t('report.metric.entriesPerHour')}</small></strong><span>${t('report.metric.estimateDivision',{entries:sumCounts(p.counts),hours:fmt(p.total_minutes/60,1)})} ${help('ahi')}</span></article>
+    <article class="panel patient-metric"><div>${t('report.metric.frequency')} ${help('frequency')}</div><strong>${fmt(p.frequency,2)} <small>${t('report.metric.entriesPerHour')}</small></strong><span>${t('report.metric.estimateDivision',{entries:sumCounts(p.counts),hours:fmt(p.total_minutes/60,1)})} ${help('ahi')}</span><div id="patientVariability" class="patient-variability"></div></article>
     <article class="panel patient-metric assessment-metric" data-state="${a.state}"><div>${t('report.metric.assessment')} ${help('assessment')}</div><strong class="text-value">${escape(a.brief)}</strong><span>${escape(a.confidence)}</span></article>
     <article class="panel patient-metric"><div>${t('report.metric.averageTreatment')} ${help('usage')}</div><strong class="time-value">${duration(p.mean_minutes)}</strong><span>${t('report.metric.daysUse',{useDays:p.use_days,settledDays:p.settled_days})}</span></article>`;
   renderPatientComparison();
@@ -78,10 +119,11 @@ function renderReport(){
   $('#patientFollowup').dataset.level=f.level;
   $('#patientFollowup').innerHTML=`<div class="eyebrow">${t('report.followupHeading')}</div><h2>${escape(f.title)}</h2><p>${escape(f.reason)}</p><div class="next-step">${escape(f.action)}</div><button id="editFeelings" class="outline">${Object.values(r.context).some(x=>x==='yes'||x==='no')?t('report.updateFeelings'):t('report.addFeelings')}</button><details class="followup-why"><summary>${t('report.followupWhy')}</summary><p>${t('report.followupWhyText')}</p>${f.refs.map(id=>{const source=r.sources.find(s=>s.id===id);return source?`<a href="${escape(source.url)}" rel="noreferrer">${escape(source.title)}</a>`:'';}).join('<br>')}</details>`;
   $('#editFeelings').onclick=()=>{$('#contextPanel').open=true;$('#contextPanel').scrollIntoView({block:'start'});$('#sleepHours').focus({preventScroll:true});};
-  $('#patientCoverage').textContent=v.coverage+' '+t('report.imported',{value:r.imported_at?.replace('T',' ')||t('common.none')});
+  const importedAt=(v.freshness||r.freshness||{}).imported_at||r.imported_at;
+  $('#patientCoverage').textContent=v.coverage+' '+t('report.imported',{value:formatStamp(importedAt)});
   $('#patientTypes').innerHTML=['OSA','CSA','HYP'].map(k=>`<div>${escape(v.glossary[k][0])} ${help(k)}<strong>${p.counts[k]} <small>${t('report.metric.entries')}</small></strong><span>${fmt(p.type_rates[k],2)} ${t('report.metric.entriesPerHour')}</span></div>`).join('');
   $('#patientGlossary').innerHTML=Object.values(v.glossary).map(([name,meaning])=>`<details class="glossary-item"><summary>${escape(name)}</summary><p>${escape(meaning)}</p></details>`).join('');
-  renderProfessional();renderContext();updateExportState();
+  renderVariability();renderProfessional();renderTreatment();renderContext();updateExportState();
 }
 function sumCounts(counts){return Object.values(counts).reduce((a,b)=>a+b,0);}
 function renderPatientComparison(){
@@ -105,13 +147,66 @@ function renderPatientComparison(){
   $('#patientTrendTable').innerHTML=`<table><thead><tr><th>${t('report.tableDate')}</th><th>${t('report.tableRate')}</th><th>${t('report.tableTreatment')}</th></tr></thead><tbody>${points.map(d=>`<tr><td>${d.state==='settled'?`<button class="report-date" data-patient-day="${d.date}">${d.date}</button>`:d.date}</td><td>${d.frequency==null?(d.state==='pending'?t('common.pending'):'—'):fmt(d.frequency,2)}</td><td>${duration(d.minutes)}</td></tr>`).join('')}</tbody></table>`;
   $$('[data-patient-day]').forEach(el=>{el.onclick=()=>openDay(el.dataset.patientDay);el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openDay(el.dataset.patientDay);}};});
 }
+function treatmentKindValue(){return document.querySelector('input[name="treatmentKind"]:checked')?.value||'other';}
+function setTreatmentKind(value){
+  const input=document.querySelector(`input[name="treatmentKind"][value="${CSS.escape(value||'other')}"]`)||document.querySelector('input[name="treatmentKind"][value="other"]');
+  if(input)input.checked=true;
+}
+function resetTreatmentForm(){
+  $('#treatmentId').value='';$('#treatmentDate').value=reportData?.current?.end||'';$('#treatmentNote').value='';setTreatmentKind('mask');
+  $('#treatmentEditorSummary').textContent=t('treatment.add');$('#saveTreatment').textContent=t('treatment.save');$('#cancelTreatment').hidden=true;
+}
+function renderChangeComparison(change){
+  const c=change.comparison||{},before=aggregateLabel(c.before),after=aggregateLabel(c.after),parts=[];
+  if(before)parts.push(`<span>${escape(t('treatment.beforeLabel',{value:before}))}</span>`);
+  if(after)parts.push(`<span>${escape(t('treatment.afterLabel',{value:after}))}</span>`);
+  const sentence=changeComparisonText(change);
+  return `<div class="treatment-comparison"><div>${parts.join('')}</div><strong>${escape(sentence)}</strong></div>`;
+}
+function renderTreatment(){
+  const list=$('#treatmentList');if(!list)return;
+  const p=reportData.current,changes=(Array.isArray(reportData.treatment_changes)?reportData.treatment_changes:[]).filter(change=>change?.date&&change.date>=p.start&&change.date<=p.end).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  $('#treatmentPreview').textContent=changes.length?t('treatment.previewCount',{count:changes.length}):t('treatment.previewEmpty');
+  list.innerHTML=changes.length?changes.map(change=>`<article class="treatment-entry"><div class="treatment-entry-head"><div><time datetime="${escape(change.date)}">${escape(change.date)}</time><strong>${escape(change.kind_label||t(treatmentKinds[change.kind]||treatmentKinds.other))}</strong></div><div class="treatment-actions"><button type="button" class="outline" data-treatment-edit="${escape(change.id)}">${t('treatment.edit')}</button><button type="button" class="outline" data-treatment-delete="${escape(change.id)}">${t('treatment.delete')}</button></div></div>${change.note?`<p class="treatment-note-text">${escape(change.note)}</p>`:''}${renderChangeComparison(change)}</article>`).join(''):`<p class="treatment-empty">${t('treatment.empty')}</p>`;
+  $$('[data-treatment-edit]').forEach(button=>button.onclick=()=>editTreatment(button.dataset.treatmentEdit));
+  $$('[data-treatment-delete]').forEach(button=>button.onclick=()=>deleteTreatment(button.dataset.treatmentDelete));
+  if(treatmentStatusMessage){$('#treatmentStatus').textContent=treatmentStatusMessage;treatmentStatusMessage='';}
+}
+function editTreatment(id){
+  const change=(reportData.treatment_changes||[]).find(item=>String(item.id)===String(id));
+  if(!change)return;
+  $('#treatmentId').value=change.id;$('#treatmentDate').value=change.date||'';$('#treatmentNote').value=change.note||'';setTreatmentKind(change.kind);
+  $('#treatmentEditorSummary').textContent=t('treatment.editSummary');$('#saveTreatment').textContent=t('treatment.saveEdit');$('#cancelTreatment').hidden=false;$('#treatmentEditor').open=true;$('#treatmentDate').focus({preventScroll:true});
+}
+async function deleteTreatment(id){
+  const change=(reportData.treatment_changes||[]).find(item=>String(item.id)===String(id));
+  if(!change||!window.confirm(t('treatment.confirmDelete',{date:change.date})))return;
+  $('#treatmentStatus').textContent=t('treatment.deleting');
+  try{
+    await api('change/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:change.id})});
+    treatmentStatusMessage=t('treatment.deleted');await loadReport(true);
+  }catch(error){$('#treatmentStatus').textContent=t('treatment.deleteFailed',{error:error.message});}
+}
+function renderPreviousContext(){
+  const box=$('#previousContext');if(!box)return;
+  const previous=reportData?.previous_context;
+  if(!previous?.context){box.hidden=true;box.replaceChildren();return;}
+  box.hidden=false;
+  box.innerHTML=`<div class="previous-context-copy"><strong>${t('treatment.previousHeading')}</strong><span>${escape(t('treatment.previousSource',{start:previous.start||'—',end:previous.end||'—',saved:previous.saved_at?formatStamp(previous.saved_at):t('common.none')}))}</span></div><div class="previous-context-actions"><button type="button" class="outline" id="loadPreviousContext">${t('treatment.loadPrevious')}</button><label><input type="checkbox" id="includePreviousNote">${t('treatment.includePreviousNote')}</label></div>`;
+  $('#loadPreviousContext').onclick=()=>{
+    const prior=previous.context||{},loaded={sleep_hours:normalizeSleepHours(prior.sleep_hours),note:$('#includePreviousNote').checked?(prior.note||''):''};
+    Object.keys(contextNames).forEach(key=>loaded[key]=prior[key]??'unknown');
+    contextDrafts.set(contextKey(),loaded);renderContext();$('#contextStatus').textContent=t('treatment.loadedPrevious');
+  };
+}
 function readForm(){
-  const context={sleep_hours:$('#sleepHours').value||null,note:$('#patientNote').value};
+  const context={sleep_hours:normalizeSleepHours($('#sleepHours').value.trim()),note:$('#patientNote').value};
   Object.entries(contextNames).forEach(([key,name])=>context[key]=contextValue(name));return context;
 }
 function renderContext(){
-  const key=reportKey(reportData),c=contextDrafts.get(key)||reportData.context;
+  const key=reportKey(reportData),c=contextDrafts.get(key)||reportData.context||{};
   $('#contextForm').dataset.period=key;
+  renderPreviousContext();
   const choices=[['unknown',t('context.unknown')],['yes',t('context.yes')],['no',t('context.no')]];
   $('#contextFields').innerHTML=`<label>${t('report.contextSleep')}<div><input id="sleepHours" type="number" min="0.1" max="24" step="0.1" placeholder="${escape(t('report.sleepPlaceholder'))}" aria-label="${escape(t('report.sleepAria'))}"> ${t('report.hoursUnit')}</div></label>`+Object.entries(reportData.patient.context_labels).map(([key,label])=>`<fieldset class="choice-field"><legend>${escape(label)}</legend><div class="choice-group" role="radiogroup" aria-label="${escape(label)}">${choices.map(([value,text])=>`<label class="choice-option"><input type="radio" name="${contextNames[key]}" value="${value}"><span>${text}</span></label>`).join('')}</div></fieldset>`).join('');
   $('#sleepHours').value=c.sleep_hours??'';$('#patientNote').value=c.note;
@@ -122,7 +217,8 @@ function renderContext(){
 }
 function updateDraftStatus(){
   const dirty=contextDrafts.has(contextKey());
-  $('#contextStatus').textContent=dirty?t('status.draft'):t('status.contextSaved');
+  const saved=reportData?.context_saved_at;
+  $('#contextStatus').textContent=dirty?t('status.draft'):saved?t('status.contextSavedAt',{time:formatStamp(saved)}):t('status.contextSaved');
   $('#discardContext').hidden=!dirty;
   if(reportData)$('#contextPreview').textContent=dirty?t('status.draftPreview'):reportData.patient.feeling;
   updateExportState();
@@ -140,6 +236,21 @@ $('#contextForm').onsubmit=async event=>{
   finally{$('#saveContext').disabled=false;updateExportState();}
 };
 $('#discardContext').onclick=()=>{contextDrafts.delete(contextKey());renderContext();};
+$('#treatmentForm').onsubmit=async event=>{
+  event.preventDefault();if(!reportData||reportLoading)return;
+  const id=$('#treatmentId').value.trim(),date=$('#treatmentDate').value,kind=treatmentKindValue(),note=$('#treatmentNote').value.trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){$('#treatmentStatus').textContent=t('treatment.invalidDate');return;}
+  if(note.length>1000){$('#treatmentStatus').textContent=t('treatment.noteTooLong');return;}
+  const body={date,kind,note};if(id)body.id=id;
+  $('#saveTreatment').disabled=true;$('#treatmentStatus').textContent=t('treatment.saving');
+  try{
+    await api('change',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    treatmentStatusMessage=date>=dateRange[0]&&date<=dateRange[1]?t('treatment.saved'):t('treatment.savedOutside');
+    resetTreatmentForm();$('#treatmentEditor').open=false;await loadReport(true);
+  }catch(error){$('#treatmentStatus').textContent=t('treatment.saveFailed',{error:error.message});}
+  finally{$('#saveTreatment').disabled=false;}
+};
+$('#cancelTreatment').onclick=()=>{resetTreatmentForm();$('#treatmentEditor').open=false;$('#treatmentStatus').textContent='';};
 $('#generateReport').onclick=()=>{
   const start=$('#reportStart').value,end=$('#reportEnd').value;
   if(!start||!end||start>end||start<overview.days[0].date||end>overview.days.at(-1).date){showError(t('status.invalidReportRange'));return;}
