@@ -38,3 +38,12 @@
 - 分母暂不改：息览用已结算 USR 用机分钟数，OSCAR 用 session/MaskOn 时段。缺失波形时不能用短波形覆盖时长替代全天摘要分母。tooltip 已说明此差异，未提升为已核验 AHI。
 - 解析代理扫描当前快照未发现有符号负流量样本；不据此泛化所有 BMC 机型，不做不必要的符号改动。
 - 通过 24 项现有及必要解析测试、JavaScript 语法检查、单夜真实报告双通道输出检查。尚未据此宣称完成 OSCAR 实际导入对账。
+
+## 本地源码参考仓库
+
+2026-09-13 已将两个仓库克隆到本机，后续研究优先使用本地搜索和读取，不再逐文件从网页抓取。当前使用浅克隆，包含完整工作树；仅在需要新版本或历史追溯时更新或补充历史。
+
+- `/home/ztmdsbt/workspaces/references/OSCAR-code`：`64c5e90a26f91fb15868bcfcccde0c1e1522ac86`
+- `/home/ztmdsbt/workspaces/references/oscar-sql`：`53c45136af4ae70fea1188b39da43e813a4a5d67`
+
+两者均来自 `https://gitlab.com/CrimsonNape/` 下对应仓库，与本轮研究引用的版本一致。
