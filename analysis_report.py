@@ -238,7 +238,7 @@ def report_markdown(report):
     for d in report['wave_reviews']:
         if 'error' in d:lines.append(f"- {d['date']}：读取失败");continue
         lines.append(f"- {d['date']}：有效波形 {d['wave_seconds']} 秒；覆盖摘要时长约 {number(d['coverage']*100 if d['coverage'] is not None else None,0)}%；{len(d['gaps'])} 个至少 5 分钟的记录间隔；{d['events_with_wave']}/{d['events']} 个事件记录分钟与保留波形有交集。")
-        for key,label in [('pressure','压力 cmH2O'),('leak','设备漏气 L/min')]:
+        for key,label in [('ipap','吸气压力 IPAP cmH2O'),('epap','呼气压力 EPAP cmH2O'),('leak','设备漏气 L/min')]:
             stat=d['stats'].get(key,{})
             lines.append(f"  - {label}：中位数 {number(stat.get('median'))}，P95 {number(stat.get('p95'))}。")
     lines+=['','## 复诊核对问题','',*['- '+q for q in report['questions']],'','## 依据与解释规则','',report['comparison']['rule'],'']
@@ -262,8 +262,8 @@ def report_html(report):
     waves=[]
     for d in report['wave_reviews']:
         if 'error' in d:waves.append(f"<p>{e(d['date'])}：读取失败。</p>");continue
-        pressure=d['stats'].get('pressure',{});leak=d['stats'].get('leak',{})
-        waves.append(f"<section><h3>{e(d['date'])}</h3><p>有效波形 {d['wave_seconds']} 秒；约为摘要时长 {number(d['coverage']*100 if d['coverage'] is not None else None,0)}%；{len(d['gaps'])} 个至少 5 分钟的无记录间隔。{d['events_with_wave']}/{d['events']} 个事件分钟与波形有交集。</p><p>压力中位/P95 {number(pressure.get('median'))}/{number(pressure.get('p95'))} cmH₂O；设备漏气中位/P95 {number(leak.get('median'))}/{number(leak.get('p95'))} L/min。</p></section>")
+        ipap=d['stats'].get('ipap',{});epap=d['stats'].get('epap',{});leak=d['stats'].get('leak',{})
+        waves.append(f"<section><h3>{e(d['date'])}</h3><p>有效波形 {d['wave_seconds']} 秒；约为摘要时长 {number(d['coverage']*100 if d['coverage'] is not None else None,0)}%；{len(d['gaps'])} 个至少 5 分钟的无记录间隔。{d['events_with_wave']}/{d['events']} 个事件分钟与波形有交集。</p><p>吸气压力 IPAP 中位/P95 {number(ipap.get('median'))}/{number(ipap.get('p95'))} cmH₂O；呼气压力 EPAP 中位/P95 {number(epap.get('median'))}/{number(epap.get('p95'))} cmH₂O；设备漏气中位/P95 {number(leak.get('median'))}/{number(leak.get('p95'))} L/min。</p></section>")
     sources=''.join(f"<li><a href='{e(s['url'])}' rel='noreferrer'>{e(s['title'])}</a></li>" for s in SOURCES)
     return f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PAP 治疗记录分析 {e(p['start'])} — {e(p['end'])}</title>
 <style>body{{font:13px/1.8 "Noto Sans CJK SC",sans-serif;color:#20374a;max-width:950px;margin:28px auto;padding:0 24px}}h1{{font-size:23px;margin:0}}h2{{font-size:17px;border-bottom:1px solid #bbc9d3;margin-top:24px}}h3{{font-size:14px;margin:12px 0 5px}}p{{margin:5px 0}}.meta,.note{{font-size:11px;color:#637988}}.summary{{background:#edf3f7;border-left:3px solid #44789a;padding:12px;margin:15px 0}}table{{width:100%;border-collapse:collapse;font-size:12px}}th,td{{border:1px solid #d5dfe6;padding:7px;text-align:left}}th{{background:#f1f5f8;font-weight:500}}section{{break-inside:avoid;border-bottom:1px solid #e0e5e9;padding-bottom:9px}}.self{{white-space:pre-wrap}}a{{color:#225f89}}@page{{size:A4;margin:16mm}}@media print{{body{{margin:0;padding:0;font-size:11px;max-width:none}}.print-hint{{display:none}}h2{{break-after:avoid}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}</style>
@@ -273,5 +273,5 @@ def report_html(report):
 <h2>患者自述（本期间）</h2><table>{context_rows}<tr><th>自报每日平均睡眠</th><td>{e(str(context['sleep_hours'])+' 小时' if context['sleep_hours'] else '未填写')}</td></tr></table><p class="self">{e(context['note'] or '无补充备注。')}</p>
 <h2>观察、解释与建议</h2>{findings}
 <h2>优先复核日期</h2><p class="note">按事件条目频率、短用机记录及 CSA 条目频率筛选；排序不等于异常诊断。</p><table><thead><tr><th>日期</th><th>原因</th><th>用机</th><th>条目/h</th><th>波形</th></tr></thead><tbody>{review or '<tr><td colspan="5">无符合筛选条件的日期。</td></tr>'}</tbody></table>
-<h2>重点波形资料（最多3天）</h2>{''.join(waves) or '<p>优先日期没有可用波形。</p>'}<p class="note">有目的抽样不代表整个期间。记录间隔不等于觉醒；事件分钟与波形有交集不代表识别正确。</p>
+<h2>重点波形资料（最多3天）</h2>{''.join(waves) or '<p>优先日期没有可用波形。</p>'}<p class="note">压力通道沿用 OSCAR 的 BMC 旧格式解释，待原厂核验。有目的抽样不代表整个期间。记录间隔不等于觉醒；事件分钟与波形有交集不代表识别正确。</p>
 <h2>复诊核对问题</h2><ol>{''.join('<li>'+e(q)+'</li>' for q in report['questions'])}</ol><h2>依据</h2><ul>{sources}</ul></html>'''
