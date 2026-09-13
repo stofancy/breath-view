@@ -166,7 +166,7 @@ $('#closeExport').onclick=()=>$('#exportDialog').close();
 let termAnchor=null;
 function closeTerm(){if(termAnchor){termAnchor.removeAttribute('aria-describedby');termAnchor.setAttribute('aria-expanded','false');}termAnchor=null;$('#termTooltip').hidden=true;}
 function showTerm(button){
-  const term=reportData?.patient.glossary[button.dataset.term];if(!term)return;
+  const term=button.dataset.explanation?[button.dataset.title,button.dataset.explanation]:reportData?.patient.glossary[button.dataset.term];if(!term)return;
   closeTerm();termAnchor=button;
   const tip=$('#termTooltip');tip.innerHTML=`<strong>${escape(term[0])}</strong><p>${escape(term[1])}</p>`;tip.hidden=false;
   button.setAttribute('aria-describedby','termTooltip');button.setAttribute('aria-expanded','true');

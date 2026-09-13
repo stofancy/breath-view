@@ -67,7 +67,7 @@
           <div id="charts"></div>
           <div id="noWave" class="empty-state" hidden>没有保留波形。可查看右侧的历史事件记录。</div>
           <div class="workspace-help"><span id="sampleHint">概览保留极值抽样</span><span>拖拽：放大区间 · 双击：全部记录 · ← →：平移</span></div>
-          <details class="channel-notes"><summary>通道定义与数据精度</summary><p>流量为设备原始通道，未扣除基线。漏气通道是否扣除面罩正常排气尚未确认。事件阴影覆盖其记录所在的一分钟，不是精确的事件起止时间。曲线空白表示无有效记录。</p></details>
+          <details class="channel-notes"><summary>通道定义与数据精度</summary><p>吸气压力 IPAP 与呼气压力 EPAP 按 OSCAR 的 BMC 旧格式分别展示，尚未与原厂软件逐项核验；此前的单一压力图是 EPAP 通道。流量为设备原始通道，未扣除基线。漏气通道是否扣除面罩正常排气尚未确认。事件阴影覆盖其记录所在的一分钟，不是精确的事件起止时间。曲线空白表示无有效记录。</p></details>
         </div>
         <div class="inspector">
           <section class="panel"><h2>波形统计 <span>全部保留记录</span></h2><table class="stats-table"><thead><tr><th>通道</th><th>中位数</th><th>P95 <button class="term-help" data-term="p95" aria-label="解释 P95">?</button></th></tr></thead><tbody id="stats"></tbody></table><p class="small-note">P95：95% 的保留采样值不超过此值。仅统计有数据的时段。</p></section>

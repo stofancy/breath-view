@@ -23,7 +23,8 @@ const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const channels = {
   flow: {name:'流量（原始通道）',unit:'L/min',color:'#326c92',height:150},
-  pressure: {name:'设备压力',unit:'cmH₂O',color:'#417763',height:100},
+  ipap: {name:'吸气压力 · IPAP',unit:'cmH₂O',color:'#417763',height:100,help:'吸气阶段的压力通道，用来帮助气流进入。按 OSCAR 的 BMC 旧格式解释；不是医生设定值，也不是压力越高睡得越好。'},
+  epap: {name:'呼气压力 · EPAP',unit:'cmH₂O',color:'#6b819b',height:100,help:'呼气阶段维持气道开放的压力通道。此前单一“设备压力”显示的是这一通道。与吸气压力一起参考；本机通道含义仍待原厂软件核验。'},
   leak: {name:'设备漏气通道',unit:'L/min',color:'#a2793e',height:100},
   tidal: {name:'潮气量',unit:'mL',color:'#607f9a',height:95},
   ventilation: {name:'分钟通气量',unit:'L/min',color:'#6b8152',height:95},
@@ -255,7 +256,7 @@ function renderDetail() {
   for(const selector of ['.time-nav','.segment-line','.event-timeline','.workspace-help'])$(selector).hidden=!day.wave_seconds;
   $$('#zoom button').forEach(button=>button.disabled=!day.wave_seconds);
   $('#advanced').disabled=!day.wave_seconds;
-  $('#stats').innerHTML=Object.entries(channels).filter(([key])=>key!=='flow').map(([key,channel])=>`<tr><td>${channel.name}<small>${channel.unit}</small></td><td>${fmt(day.stats[key]?.median,key==='tidal'?0:1)}</td><td>${fmt(day.stats[key]?.p95,key==='tidal'?0:1)}</td></tr>`).join('');
+  $('#stats').innerHTML=Object.entries(channels).filter(([key])=>key!=='flow').map(([key,channel])=>`<tr><td>${channel.name}${channelHelp(key,channel)}<small>${channel.unit}</small></td><td>${fmt(day.stats[key]?.median,key==='tidal'?0:1)}</td><td>${fmt(day.stats[key]?.p95,key==='tidal'?0:1)}</td></tr>`).join('');
   $('#segments').innerHTML=day.segments.map(([lo,hi],i)=>`<button data-segment="${i}" title="保留 ${hi-lo} 秒连续记录">${clock(lo)}–${clock(hi)} (${Math.round((hi-lo)/60)}分)</button>`).join('');
   $$('[data-segment]').forEach(button=>button.onclick=()=>{const [lo,hi]=day.segments[Number(button.dataset.segment)];setWindow(Math.max(0,lo-5),Math.min(86400,hi+5));});
   $('#prev').disabled=overview.days[0].date===dayKey;$('#next').disabled=overview.days.at(-1).date===dayKey;
@@ -301,9 +302,12 @@ function panWindow(direction) {
   const width=windowRange[1]-windowRange[0],lo=Math.max(0,Math.min(86400-width,windowRange[0]+width*.8*direction));
   setWindow(lo,lo+width);
 }
-function visibleChannels() {return Object.entries(channels).filter(([key])=>$('#advanced').checked||['flow','pressure','leak'].includes(key));}
+function channelHelp(key,channel) {
+  return channel.help?`<button class="term-help" data-term="${key}" data-title="${escape(channel.name)}" data-explanation="${escape(channel.help)}" aria-label="解释${escape(channel.name)}">?</button>`:'';
+}
+function visibleChannels() {return Object.entries(channels).filter(([key])=>$('#advanced').checked||['flow','ipap','epap','leak'].includes(key));}
 function renderCharts() {
-  $('#charts').innerHTML=detail.wave_seconds?visibleChannels().map(([key,channel])=>`<div class="chart-row"><div class="chart-title"><strong>${channel.name}</strong><span class="unit">${channel.unit}</span><output id="value-${key}" aria-label="${channel.name}光标读数">—</output></div><canvas data-series="${key}" height="${channel.height}" aria-label="${channel.name}时间曲线"></canvas></div>`).join(''):'';
+  $('#charts').innerHTML=detail.wave_seconds?visibleChannels().map(([key,channel])=>`<div class="chart-row"><div class="chart-title"><strong>${channel.name}</strong>${channelHelp(key,channel)}<span class="unit">${channel.unit}</span><output id="value-${key}" aria-label="${channel.name}光标读数">—</output></div><canvas data-series="${key}" height="${channel.height}" aria-label="${channel.name}时间曲线"></canvas></div>`).join(''):'';
   redraw();
 }
 function nearest(points,time) {
