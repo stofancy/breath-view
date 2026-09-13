@@ -5,9 +5,10 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import argparse, csv, io, json, secrets, threading, sys, os, logging, time, subprocess, tempfile
 from logging.handlers import RotatingFileHandler
-from datetime import date
+from datetime import date, datetime
 from storage import load, import_source, DEFAULT_HOME, MAX_ARCHIVE_BYTES
 from analysis_report import build_report, report_markdown, report_html, validate_context, period
+from patient_journal import load_changes, upsert_change, delete_change
 from portable_report import mobile_html, mobile_pdf
 from i18n import normalize_locale
 
@@ -46,12 +47,28 @@ class Application:
         path=self.home/'patient-contexts.json'
         return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
     def get_context(self,start,end):
-        return self.read_contexts().get(self.context_key(start,end),{})
+        with self.lock:
+            key=self.context_key(start,end)
+            raw=self.read_contexts().get(key)
+            if raw is None:
+                # Keep the historical API shape for an entirely unknown
+                # period. Report-only metadata is attached by make_report.
+                return {}
+            if not isinstance(raw,dict):
+                raise ValueError('自述内容格式无效')
+            context=dict(raw)
+            context.pop('_saved_at',None)
+            return context
     def save_context(self,start,end,value):
         with self.lock:
             key=self.context_key(start,end)
             values=self.read_contexts()
-            values[key]=validate_context(value)
+            context=validate_context(value)
+            # Keep sub-second ordering so two saves for periods with the same
+            # end date still have a deterministic "most recently saved"
+            # candidate.
+            context['_saved_at']=datetime.now().isoformat(timespec='microseconds')
+            values[key]=context
             self.home.mkdir(parents=True,exist_ok=True,mode=0o700)
             temp=self.home/'patient-contexts.tmp'
             with temp.open('w',encoding='utf-8') as stream:
@@ -59,6 +76,76 @@ class Application:
                 json.dump(values,stream,ensure_ascii=False,allow_nan=False)
             os.replace(temp,self.home/'patient-contexts.json')
             logging.info('context saved start=%s end=%s',start,end)
+    def previous_context(self,start,end):
+        """Find a previous saved context for this device without carrying it forward."""
+        current_key=self.context_key(start,end)
+        serial=self.data.catalog['device']['serial']
+        end_date=date.fromisoformat(end)
+        candidates=[]
+        for key,raw in self.read_contexts().items():
+            prefix=serial+'|'
+            if not isinstance(key,str) or not key.startswith(prefix) or key==current_key:
+                continue
+            parts=key[len(prefix):].split('|')
+            if len(parts)!=2:
+                continue
+            candidate_start,candidate_end=parts
+            try:
+                candidate_start_date,candidate_end_date=period(candidate_start,candidate_end)
+            except (TypeError,ValueError):
+                continue
+            if candidate_end_date>end_date:
+                continue
+            try:
+                context=validate_context(raw or {})
+            except (TypeError,ValueError):
+                continue
+            saved_at=raw.get('_saved_at') if isinstance(raw,dict) and isinstance(raw.get('_saved_at'),str) else None
+            # ISO timestamps produced by save_context sort chronologically. A
+            # legacy entry has no timestamp and remains a valid, older candidate.
+            candidates.append((candidate_end_date,saved_at or '',candidate_start_date,key,{
+                'start':candidate_start,'end':candidate_end,'saved_at':saved_at,'context':context}))
+        if not candidates:
+            return None
+        return max(candidates,key=lambda item:item[:4])[-1]
+    def report_context(self,start,end,context=None):
+        """Attach report-only metadata without changing get_context's API."""
+        with self.lock:
+            result=dict(context if context is not None else self.get_context(start,end))
+            raw=self.read_contexts().get(self.context_key(start,end))
+            if isinstance(raw,dict) and isinstance(raw.get('_saved_at'),str):
+                result['_saved_at']=raw['_saved_at']
+            previous=self.previous_context(start,end)
+            if previous:
+                result['_previous_context']=previous
+            return result
+    def make_report(self,start,end,locale='zh-CN'):
+        with self.lock:
+            if not self.data:raise ValueError('请先导入设备数据')
+            context=self.get_context(start,end)
+            metadata=self.report_context(start,end,context)
+            # Keep analysis_report's context contract unchanged: its context
+            # is the validated patient payload. Journal metadata belongs at
+            # the report top level and must never be used to prefill context.
+            report=build_report(self.data,start,end,context,locale=locale,changes=self.get_changes())
+            report['context_saved_at']=metadata.get('_saved_at')
+            report['previous_context']=metadata.get('_previous_context')
+            return report
+    def get_changes(self):
+        with self.lock:
+            if not self.data:return []
+            serial=self.data.catalog['device']['serial']
+            return load_changes(self.home,serial)
+    def save_change(self,value):
+        with self.lock:
+            if not self.data:raise ValueError('请先导入设备数据')
+            serial=self.data.catalog['device']['serial']
+            return upsert_change(self.home,serial,value)
+    def remove_change(self,identifier):
+        with self.lock:
+            if not self.data:raise ValueError('请先导入设备数据')
+            serial=self.data.catalog['device']['serial']
+            return delete_change(self.home,serial,identifier)
     def start_import(self,path, cleanup=False, reserved=False):
         with self.lock:
             if self.status['busy'] and not reserved:raise ValueError('正在导入，请稍候')
@@ -128,7 +215,7 @@ def serve(app,port=0,host='127.0.0.1'):
                     with app.lock:
                         if not app.data:raise ValueError('请先导入设备数据')
                         start=q.get('start',[''])[0];end=q.get('end',[''])[0]
-                        report=build_report(app.data,start,end,app.get_context(start,end),locale=locale)
+                        report=app.make_report(start,end,locale=locale)
                     if route.endswith('.pdf'):
                         logging.info('mobile pdf export started start=%s end=%s',start,end)
                         raw=mobile_pdf(report)
@@ -140,7 +227,7 @@ def serve(app,port=0,host='127.0.0.1'):
                         if route=='api/overview':return self.respond(app.data.overview())
                         if route in ('api/report','api/report.md','api/report.html'):
                             start=q.get('start',[''])[0];end=q.get('end',[''])[0]
-                            report=build_report(app.data,start,end,app.get_context(start,end),locale=locale)
+                            report=app.make_report(start,end,locale=locale)
                             if route.endswith('.html'):
                                 return self.respond(report_html(report).encode(),kind='text/html; charset=utf-8',filename=f'pap-review-{start}-{end}.html')
                             if route.endswith('.md'):
@@ -170,7 +257,8 @@ def serve(app,port=0,host='127.0.0.1'):
         def do_POST(self):
             self._request_started=time.monotonic()
             route,q=self.route()
-            if route not in ('api/import','api/context','api/upload'):return self.respond({'error':'Not found'},404)
+            if route not in ('api/import','api/context','api/upload','api/change','api/change/delete'):
+                return self.respond({'error':'Not found'},404)
             origin=self.headers.get('Origin')
             if origin and origin not in ('http://'+self.headers.get('Host',''), 'https://'+self.headers.get('Host','')):
                 return self.respond({'error':'Forbidden'},403)
@@ -209,10 +297,16 @@ def serve(app,port=0,host='127.0.0.1'):
                 payload=json.loads(self.rfile.read(n))
                 if route=='api/import':
                     app.start_import(payload['path']);self.respond({'started':True})
-                else:
+                elif route=='api/context':
                     logging.info('context save requested start=%s end=%s',payload.get('start'),payload.get('end'))
                     app.save_context(payload['start'],payload['end'],payload['context'])
                     self.respond({'saved':True})
+                elif route=='api/change':
+                    change=app.save_change(payload)
+                    self.respond({'saved':True,'change':change})
+                else:
+                    removed=app.remove_change(payload.get('id'))
+                    self.respond({'deleted':True,'id':removed['id']})
             except (ValueError,KeyError,TypeError,OSError) as e:
                 logging.exception('POST failed route=%s',route)
                 self.respond({'error':str(e)},400)
