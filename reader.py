@@ -240,7 +240,11 @@ class Dataset:
         d['range'] = [lo,hi]
         select = (seconds>=lo)&(seconds<=hi)
         w,st = words[select],seconds[select]
-        def reduce_points(x,y,limit=2200):
+        # Plot gaps are a property of the packet timeline, not the coarser
+        # five-second session segmentation above.  A +2 s packet step leaves
+        # one unobserved second even though OSCAR keeps it in one session.
+        plot_boundaries = (st[:-1][np.diff(st)>1] + 1).astype(float).tolist()
+        def reduce_points(x,y,limit=2200,boundaries=()):
             """Min/max envelope preserves extrema. Gaps remain explicit nulls."""
             if len(x)==0:
                 return []
@@ -253,12 +257,11 @@ class Dataset:
                         ids.extend(sorted(set([i+int(np.nanargmin(vals)),i+int(np.nanargmax(vals))])))
                     else:ids.append(i)
                 # Keep points on both sides of every real missing-data interval.
-                gaps=np.flatnonzero(np.diff(x)>1.1)
+                gaps=np.flatnonzero(np.diff(x)>1)
                 ids=np.unique(np.r_[ids,gaps,gaps+1,0,len(x)-1]).astype(int)
                 x,y=x[ids],y[ids]
             out=[]
-            # Do not infer a gap from downsampling; use original packet segments.
-            boundaries=[v[1] for v in d['segments'][:-1]]
+            # Do not infer a gap from downsampling; use original packet times.
             j=0
             for xx,yy in zip(x,y):
                 while j<len(boundaries) and boundaries[j]<=xx:
@@ -269,12 +272,16 @@ class Dataset:
         for name,(offset,scale) in WAVEFORM_FIELDS.items():
             v=w[:,offset].astype(float)/scale
             v[w[:,offset]==65535]=np.nan
-            d['series'][name]=reduce_points(st,v)
+            d['series'][name]=reduce_points(st,v,boundaries=plot_boundaries)
         if len(w):
             x=(st[:,None]+np.arange(25)/25).ravel()
             # The documented BMC channel is unsigned total flow; do not subtract
             # an invented baseline to turn it into patient flow.
             v=w[:,54:79].astype(float).ravel()/10
             v[w[:,54:79].ravel()==65535]=np.nan
-            d['series']['flow']=reduce_points(x,v)
+            # Equal-timestamp packets contain distinct samples on the same
+            # one-second interval.  Sorting the expanded points prevents the
+            # second packet from drawing a backwards line (e.g. 0.96 -> 0.0).
+            order=np.argsort(x,kind='stable')
+            d['series']['flow']=reduce_points(x[order],v[order],boundaries=plot_boundaries)
         return d
