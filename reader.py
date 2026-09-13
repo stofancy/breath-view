@@ -186,9 +186,15 @@ class Dataset:
         a = np.concatenate(parts)
         ts, valid = timestamps(a)
         a,ts = a[valid],ts[valid]
-        unique,indices = np.unique(ts,return_index=True)
-        duplicates = len(ts)-len(unique)
-        a,ts = a[indices],unique
+        # BMC packets are nominally one second each, but the device can emit
+        # adjacent packets with the same timestamp (and occasional +2 s
+        # steps).  Keep every valid packet: collapsing equal timestamps loses
+        # waveform samples and makes the +2 s steps look like session breaks.
+        # Stable sorting keeps file order for equal timestamps while retaining
+        # the existing chronological ordering across file spans.
+        order = np.argsort(ts, kind='stable')
+        a,ts = a[order],ts[order]
+        duplicates = len(ts)-len(np.unique(ts))
         self._cache_key, self._cache = day,(a,ts,duplicates)
         return self._cache
 
@@ -213,7 +219,10 @@ class Dataset:
         d.update({'wave_seconds':len(a), 'duplicates':duplicates, 'series':{}, 'segments':[], 'stats':{}})
         if not len(a):
             return d
-        split = np.r_[0, np.flatnonzero(np.diff(ts)>1)+1,len(ts)]
+        # OSCAR's legacy loader starts a new waveform session only after a
+        # forward gap of at least five seconds.  Equal timestamps and normal
+        # two-second device steps therefore remain in the same segment.
+        split = np.r_[0, np.flatnonzero(np.diff(ts)>=5)+1,len(ts)]
         d['segments'] = [[int(seconds[i]),int(seconds[j-1]+1)] for i,j in zip(split[:-1],split[1:])]
         # All units below are documented mappings; pressure sensor ADC is not
         # mislabeled as cmH2O. No guessed SpO2, snore or sleep-stage output.
