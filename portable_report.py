@@ -27,9 +27,9 @@ def mobile_sections(report):
         comparisons.append(f"<h3>{label} · {e(comp['text'])}</h3><p>{e(other['start'])} 至 {e(other['end'])}，{other['settled_days']}/{other['calendar_days']} 天可计算。</p><p>每小时记录 {number(other['frequency'])} → {number(p['frequency'])}{e(use)}。</p>" if comp['eligible'] else f"<h3>{label}</h3><p>{e(other['start'])} 至 {e(other['end'])}：{e(comp['text'])}（{other['settled_days']}/{other['calendar_days']} 天可计算）。</p>")
     blocks.append(('近期治疗与下一步',f"""
         <div class="lead"><h2>{e(v['title'])}</h2><p>{e(v['detail'])}</p></div>
-        <p><b>核心指标 AHI：暂无法确认。</b>本卡条目频率尚未确认等同原厂 AHI，不能套用轻、中、重度分级。</p>
+        <p class="note">{e(v['boundary'])}</p><h3>主要判断依据</h3><ul>{''.join('<li>'+e(reason)+'</li>' for reason in v['assessment']['reasons'][:3])}</ul>
         <h3>需要找医生吗</h3><p><b>{e(f['title'])}</b></p><p>{e(f['reason'])}</p><p>{e(f['action'])}</p>
-        {''.join(comparisons)}<p class="note">{e(v['boundary'])}</p>"""))
+        {''.join(comparisons)}"""))
     context = ''.join(f"<p><b>{e(label)}</b><br>{ {'yes':'是','no':'否','unknown':'未填写'}[c[key]] }</p>" for key,label in v['context_labels'].items())
     blocks.append(('我的感受与复诊问题',f"""<p class="note">以下为 {e(p['start'])} 至 {e(p['end'])} 的患者自述；未填写保持未知。</p>
         <p><b>平均每天睡眠（含午睡）</b><br>{e(str(c['sleep_hours'])+' 小时' if c['sleep_hours'] is not None else '未填写')}</p>
@@ -49,6 +49,7 @@ def mobile_sections(report):
         <h3>这份摘要如何使用</h3><p>从本地 SD 卡副本解析，尚未与原厂逐项核对。事件条目可能按分钟聚合；频率使用戴机时间作分母。缺失和未结算日不作零使用。治疗日从中午 12 点起算。</p>
         <p>{e(report['comparison']['rule'])} 去年同期按同一月日对齐，闰日取 2 月 28 日；重叠期间不自动比较。</p>
         <p>没有已解析的血氧、实际睡眠时长、睡眠分期和觉醒数据；不能判定治疗已达标或自行调整压力。请结合原厂报告、原睡眠监测及症状判断。</p>
+        <h3>初步判断如何得出</h3><p>{e(v['assessment']['confidence_note'])}</p><ul>{''.join('<li>'+e(rule)+'</li>' for rule in v['assessment']['rules'])}</ul>
         <h3>主要依据</h3><ul>{''.join('<li><a href="'+e(s['url'])+'">'+e(s['title'])+'</a></li>' for s in report['sources'])}</ul>"""))
     return blocks
 

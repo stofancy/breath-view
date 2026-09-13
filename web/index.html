@@ -26,7 +26,7 @@
       <div class="toolbar period-toolbar"><span class="period-label">查看最近</span><div class="segmented" id="reportPeriod"><button data-days="7">7 天</button><button data-days="30" class="selected">30 天</button><button data-days="90">90 天</button></div><details class="custom-period"><summary>自选日期</summary><div class="toolbar"><input type="date" id="reportStart" aria-label="分析开始日期"><span>至</span><input type="date" id="reportEnd" aria-label="分析结束日期"><button id="generateReport" class="outline">应用</button></div></details><button id="openExport" class="primary">带去看医生 · 导出</button></div>
       <div id="reportStatus" class="status-line" role="status"></div>
       <div id="reportContent" hidden>
-        <article class="patient-lead panel"><div class="eyebrow" id="patientPeriod"></div><h2 id="patientTitle"></h2><p id="patientDetail"></p><div class="patient-boundary"><span id="patientBoundary"></span><button class="term-help" data-term="quality" aria-label="了解数据能说明什么">?</button></div></article>
+        <article class="patient-lead panel"><div class="eyebrow" id="patientPeriod"></div><h2 id="patientTitle"></h2><p id="patientDetail"></p><div class="patient-boundary"><span id="patientBoundary"></span><button class="term-help" data-term="assessment" aria-label="了解初步判断的把握程度">?</button></div><details class="assessment-why"><summary>为什么这样判断</summary><ul id="assessmentReasons"></ul><p id="assessmentConfidence" class="small-note"></p></details></article>
         <div class="patient-metrics" id="patientMetrics"></div>
         <div class="patient-middle">
           <article class="panel patient-trend"><div class="panel-heading"><h2>比以前怎样 <button class="term-help" data-term="comparison" aria-label="了解比较方法">?</button></h2><div class="segmented" id="patientCompare"><button data-compare="previous" class="selected">比前期</button><button data-compare="year">去年同期</button></div></div><div id="patientChange"></div><div id="patientChart"></div><p class="small-note">每日呼吸事件记录 / 小时 · 点击图中的日期可查看详情</p><details class="trend-values"><summary>查看每日数字</summary><div class="table-scroll" id="patientTrendTable"></div></details></article>
@@ -40,7 +40,7 @@
         <details class="analysis-detail"><summary>详细解释与下一步</summary><div id="reportFindings"></div></details>
         <details class="analysis-detail"><summary>值得复核的日期与波形</summary><div class="table-scroll"><table><thead><tr><th>日期</th><th>筛选原因</th><th>使用时长</th><th>事件条目/h</th><th>波形</th></tr></thead><tbody id="reportDays"></tbody></table></div><div id="reportWaves"></div></details>
         <details class="analysis-detail"><summary>复诊时可以问医生</summary><ol id="reportQuestions"></ol></details>
-        <details class="analysis-detail report-method"><summary>术语、分析规则与来源</summary><div id="patientGlossary"></div><p id="comparisonRule"></p><ul id="reportSources"></ul><p>波形只复核筛选出的最多 3 个日期，不外推整个期间。少于 4 小时只作时长分档，不表示 4 小时就足够治疗。</p></details>
+        <details class="analysis-detail report-method"><summary>术语、分析规则与来源</summary><div id="patientGlossary"></div><h3>方向性判断的具体规则</h3><ul id="assessmentRules"></ul><p id="comparisonRule"></p><ul id="reportSources"></ul><p>波形只复核筛选出的最多 3 个日期，不外推整个期间。少于 4 小时只作时长分档，不表示 4 小时就足够治疗。</p></details>
         <a id="reportDownload" class="outline" download>下载完整医生参考（HTML）</a></div>
       </details>
       <div id="patientCoverage" class="small-note"></div>

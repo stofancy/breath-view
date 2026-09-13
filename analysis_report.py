@@ -4,7 +4,7 @@ from statistics import median
 import math
 import html
 
-RULE_VERSION = '2.0'
+RULE_VERSION = '2.1'
 SOURCES = [
     {'id':'NIH-LIVING','title':'NIH · 睡眠呼吸暂停随访与困倦驾驶','url':'https://www.nhlbi.nih.gov/health/sleep-apnea/living-with'},
     {'id':'NIH-AHI','title':'MedlinePlus · 睡眠监测与 AHI 的含义','url':'https://medlineplus.gov/ency/article/003932.htm'},
@@ -107,7 +107,7 @@ def build_report(dataset,start,end,context=None):
                 f"{current['under4_days']} 个已结算日少于 4 小时；4 小时只是描述分档，不代表足够治疗，也不评价整夜是否覆盖。",
                 '与实际入睡、起床和午睡时段核对，确认是否在所有睡眠时段使用；若摘机或不适影响使用，先处理影响佩戴的问题。',
                 ('ATS-PAP',))
-        finding('events','事件负担：可以描述，尚不能判定治疗达标',
+        finding('events','呼吸事件水平与后续关注',
                 f"共 {sum(current['counts'].values())} 条事件记录，按使用时间加权为 {number(current['frequency'])} 条目/小时；OSA {current['counts']['OSA']}、CSA {current['counts']['CSA']}、HYP {current['counts']['HYP']}。",
                 '这些是设备条目，可能按分钟聚合；没有脑电睡眠时间和独立血氧数据，不能换算为已验证的临床 AHI，也不能据此排除残余睡眠呼吸问题。',
                 '复诊时将事件较集中的日期与症状、原厂报告和相应波形一起核对。需要复查睡眠监测与否由医生结合持续症状及无法解释的设备数据判断。',
@@ -168,9 +168,9 @@ def build_report(dataset,start,end,context=None):
     answered=any(context[k]!='unknown' for k in CONTEXT_FIELDS) or context['sleep_hours'] is not None or bool(context['note'])
     report['context_complete']=all(context[k]!='unknown' for k in CONTEXT_FIELDS)
     if not answered:
-        finding('context_missing','临床结论仍缺少症状和睡眠时段信息',
+        finding('context_missing','补充感受可进一步完善判断',
                 '尚未填写本期间的白天困倦、面罩问题、摘机情况和自报睡眠时长。',
-                '仅从设备记录无法确认睡眠质量、整夜治疗覆盖或症状是否缓解。',
+                '当前先给出基于设备记录的治疗方向，睡醒感受可帮助区分数字改善与实际恢复。',
                 '补充下方本期间自述；若症状持续或再次出现，携带报告与睡眠医生讨论随访评估。',('AASM2021',))
     if context['sleep_hours'] and current['mean_minutes'] is not None:
         diff=context['sleep_hours']*60-current['mean_minutes']
@@ -195,14 +195,6 @@ def build_report(dataset,start,end,context=None):
                 '记录摘机原因与时刻，优先解决面罩不适或其他佩戴障碍，并与医生讨论如何覆盖完整睡眠时段。',('ATS-PAP','ATS-MASK'))
     if current['zero_duration_event_days']:
         finding('inconsistent_summary','存在需要核对的摘要不一致',f"{current['zero_duration_event_days']} 天使用时长为零但记录了事件。",'这些天的事件未进入频率计算。','核对原厂报告与设备时间。')
-    if not settled:summary='当前期间缺少已结算摘要，不能生成用机或事件频率结论。先补充数据。'
-    else:
-        summary=f"本期间可确认：{current['settled_days']} 个已结算记录日平均用机 {minutes(current['mean_minutes'])}，设备事件条目频率 {number(current['frequency'])} /h。"
-        if context['sleepiness']=='yes':summary+='存在持续或加重的困倦自述，建议复诊核对治疗覆盖及其他相关因素。'
-        elif context['mask_problem']=='yes' or context['mask_off']=='yes':summary+='已报告影响佩戴的问题，优先解决面罩或摘机障碍并核对整夜覆盖。'
-        elif not report['context_complete']:summary+='目前缺少完整症状自述，尚不能判断治疗是否充分或症状是否缓解。'
-        else:summary+='自述未报告上述困倦或佩戴问题；仍不能单凭本软件数据判定 OSA 已控制。'
-        summary+=f"只有 {current['wave_days']} 天有保留波形，以下复核资料不代表全部夜间情况。"
     for key in ('unrefreshed','gasping','drowsy_driving'):
         if context[key]=='yes':
             finding('symptom_'+key,'需要关注：'+CONTEXT_FIELDS[key],
@@ -210,7 +202,6 @@ def build_report(dataset,start,end,context=None):
                     '设备数字不能代替症状评估。',
                     '困倦时不要驾驶或操作危险设备，尽快联系医生评估。' if key=='drowsy_driving' else '联系睡眠门诊，核对治疗覆盖及持续症状的原因。',
                     ('NIH-LIVING',) if key=='drowsy_driving' else ('AASM2021',))
-    report['summary']=summary
     report['questions']=[
         '设备原厂报告中的 AHI 和事件类型，与这里的 USR 条目频率是否一致？',
         '实际睡眠（含午睡）是否全程戴机？短用机或记录中断能否由作息、摘机或数据缺失解释？',
@@ -219,6 +210,8 @@ def build_report(dataset,start,end,context=None):
     ]
     from patient_summary import patient_summary
     report['patient']=patient_summary(report,rows)
+    v=report['patient']
+    report['summary']=v['title']+'。'+v['detail']+v['followup']['title']+'：'+v['followup']['action']
     return report
 
 

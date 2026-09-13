@@ -61,18 +61,21 @@ async function loadReport(force=false){
   finally{if(seq===reportRequest){reportLoading=false;$('#reportContent').setAttribute('aria-busy','false');updateExportState();}}
 }
 function renderReport(){
-  const r=reportData,p=r.current,v=r.patient;
+  const r=reportData,p=r.current,v=r.patient,a=v.assessment;
   $('#reportContent').hidden=false;
   $('#patientPeriod').textContent=`${p.calendar_days} 天治疗记录`;
   $('#patientTitle').textContent=v.title;$('#patientDetail').textContent=v.detail;$('#patientBoundary').textContent=v.boundary;
+  $('#assessmentReasons').innerHTML=a.reasons.map(reason=>`<li>${escape(reason)}</li>`).join('');
+  $('#assessmentConfidence').textContent=a.confidence_note;
+  $('#assessmentRules').innerHTML=a.rules.map(rule=>`<li>${escape(rule)}</li>`).join('');
   $('#patientMetrics').innerHTML=`
-    <article class="panel patient-metric"><div>呼吸事件记录 ${help('frequency')}</div><strong>${fmt(p.frequency,2)} <small>条目 / 小时</small></strong><span>${sumCounts(p.counts)} 条记录 ÷ ${fmt(p.total_minutes/60,1)} 戴机小时</span></article>
-    <article class="panel patient-metric ahi-metric"><div>核心指标 AHI ${help('ahi')}</div><strong class="text-value">暂无法确认</strong><span>不能把左侧频率当作原厂 AHI</span></article>
+    <article class="panel patient-metric"><div>呼吸事件指数（估算） ${help('frequency')}</div><strong>${fmt(p.frequency,2)} <small>条目 / 小时</small></strong><span>${sumCounts(p.counts)} 条记录 ÷ ${fmt(p.total_minutes/60,1)} 戴机小时 · AHI ${help('ahi')}</span></article>
+    <article class="panel patient-metric assessment-metric" data-state="${a.state}"><div>初步判断 ${help('assessment')}</div><strong class="text-value">${escape(a.brief)}</strong><span>${escape(a.confidence)}</span></article>
     <article class="panel patient-metric"><div>平均每天戴机 ${help('usage')}</div><strong class="time-value">${duration(p.mean_minutes)}</strong><span>${p.use_days} 天记录到使用 / ${p.settled_days} 天可计算</span></article>`;
   renderPatientComparison();
   const f=v.followup;
   $('#patientFollowup').dataset.level=f.level;
-  $('#patientFollowup').innerHTML=`<div class="eyebrow">需要找医生吗</div><h2>${escape(f.title)}</h2><p>${escape(f.reason)}</p><div class="next-step">${escape(f.action)}</div><button id="editFeelings" class="outline">${Object.values(r.context).some(x=>x==='yes'||x==='no')?'更新我的感受':'补充我的感受'}</button><details class="followup-why"><summary>为什么这样建议</summary><p>建议结合你已填写的症状和佩戴问题；未填写不当作“没有”。呼吸事件数值尚未确认等同 AHI，不单凭它决定就医或调压。</p>${f.refs.map(id=>{const source=r.sources.find(s=>s.id===id);return source?`<a href="${escape(source.url)}" rel="noreferrer">${escape(source.title)}</a>`:'';}).join('<br>')}</details>`;
+  $('#patientFollowup').innerHTML=`<div class="eyebrow">需要找医生吗</div><h2>${escape(f.title)}</h2><p>${escape(f.reason)}</p><div class="next-step">${escape(f.action)}</div><button id="editFeelings" class="outline">${Object.values(r.context).some(x=>x==='yes'||x==='no')?'更新我的感受':'补充我的感受'}</button><details class="followup-why"><summary>为什么这样建议</summary><p>综合事件水平、趋势、佩戴和已填写的感受给出下一步。症状和安全问题优先；具体判断理由在上方“为什么这样判断”中。</p>${f.refs.map(id=>{const source=r.sources.find(s=>s.id===id);return source?`<a href="${escape(source.url)}" rel="noreferrer">${escape(source.title)}</a>`:'';}).join('<br>')}</details>`;
   $('#editFeelings').onclick=()=>{$('#contextPanel').open=true;$('#contextPanel').scrollIntoView({block:'start'});$('#sleepHours').focus({preventScroll:true});};
   $('#patientCoverage').textContent=v.coverage+' 数据导入：'+r.imported_at?.replace('T',' ')+'。';
   $('#patientTypes').innerHTML=['OSA','CSA','HYP'].map(k=>`<div>${escape(v.glossary[k][0])} ${help(k)}<strong>${p.counts[k]} <small>条目</small></strong><span>${fmt(p.type_rates[k],2)} 条目 / 小时</span></div>`).join('');
