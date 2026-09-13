@@ -246,11 +246,11 @@ function renderDetail() {
   $('#dayMetrics').innerHTML=
     card('设备使用时长',day.current?'未结算':duration(day.minutes),'历史摘要；非睡眠时长')+
     card('事件记录频率',fmt(frequency,2)+(frequency==null?'':'<small>条目 /h</small>'),`${total} 条记录 ÷ 设备使用小时 · 估算`)+
-    card('保留波形时长',duration(day.wave_seconds/60),`${day.segments.length} 个记录段 · 按波形包估算`)+
+    card('保留波形时长',duration(day.wave_seconds/60),`${day.segments.length} 个记录段 · 按波形包估算，不等于睡眠时长`)+
     card('呼吸事件条目',`${counts.OSA}<small>OSA</small>${counts.CSA}<small>CSA</small>${counts.HYP}<small>HYP</small>`,'记录时间精确到分钟');
   const coverage=day.minutes?day.wave_seconds/(day.minutes*60):null;
   $('#waveNotice').textContent=day.wave_seconds?
-    `保留波形约 ${day.wave_seconds.toLocaleString()} 秒（每包按 1 秒计）${coverage!=null?'，约为摘要使用时长的 '+Math.round(coverage*100)+'%':''}。${day.duplicates?'保留 '+day.duplicates+' 个同秒时间戳的波形包。':''}统计仅覆盖现有数据。`:
+    `保留波形约 ${day.wave_seconds.toLocaleString()} 秒（波形包名义按 1 秒计，不等于睡眠时长）${coverage!=null?'，约为摘要使用时长的 '+Math.round(coverage*100)+'%':''}。${day.duplicates?'保留 '+day.duplicates+' 个同秒时间戳的波形包。':''}统计仅覆盖现有数据。`:
     '无保留波形：可能已被覆盖、未保存或无法读取。可查阅设备摘要及事件列表。';
   $('#noWave').hidden=!!day.wave_seconds;
   for(const selector of ['.time-nav','.segment-line','.event-timeline','.workspace-help'])$(selector).hidden=!day.wave_seconds;
@@ -266,7 +266,7 @@ function renderEvents() {
   const filtered=detail.events.map((event,index)=>({...event,index})).filter(event=>eventFilter==='all'||event.kind===eventFilter);
   $('#eventCount').textContent=`${filtered.length} / ${detail.events.length} 条`;
   $$('#eventFilters button').forEach(button=>button.classList.toggle('selected',button.dataset.kind===eventFilter));
-  $('#eventList').innerHTML=filtered.map(event=>`<tr data-event="${event.index}" tabindex="0" class="${selectedEvent===event.index?'selected':''}" aria-selected="${selectedEvent===event.index}"><td>${clock(event.second)}</td><td class="${event.kind}" title="${eventNames[event.kind]}">${event.kind}</td><td>${event.duration}</td></tr>`).join('')||'<tr><td colspan="3">没有符合条件的事件记录</td></tr>';
+  $('#eventList').innerHTML=filtered.map(event=>`<tr data-event="${event.index}" tabindex="0" class="${selectedEvent===event.index?'selected':''}" aria-selected="${selectedEvent===event.index}"><td>${clock(event.second)}</td><td class="${event.kind}" title="${eventNames[event.kind]}">${event.kind}</td><td title="按 OSCAR 解释为事件持续时间；记录时间精确到分钟">${event.duration}</td></tr>`).join('')||'<tr><td colspan="3">没有符合条件的事件记录</td></tr>';
   $$('[data-event]').forEach(row=>{
     row.onclick=()=>selectEvent(Number(row.dataset.event));
     row.onkeydown=event=>{if(event.key==='Enter')selectEvent(Number(row.dataset.event));};

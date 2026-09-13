@@ -1,10 +1,50 @@
 'use strict';
 let reportData=null, reportRequest=0, compareMode='previous', reportLoading=false;
 const contextDrafts=new Map();
+let treatmentStatusMessage='';
+const treatmentKinds={mask:'面罩',clinician:'医生调整',comfort:'舒适设置',lifestyle:'作息或体重',illness:'生病或鼻塞',other:'其他'};
 const contextValue=name=>document.querySelector(`input[name="${name}"]:checked`)?.value||'unknown';
 function setContextValue(name,value){
   const input=document.querySelector(`input[name="${name}"][value="${CSS.escape(value||'unknown')}"]`)||document.querySelector(`input[name="${name}"][value="unknown"]`);
   if(input)input.checked=true;
+}
+function formatStamp(value){return value?String(value).replace('T',' '):'—';}
+function aggregateLabel(value){
+  if(!value)return '';
+  const range=value.start&&value.end?`${value.start} 至 ${value.end}`:'';
+  const days=value.evaluable_days??value.settled_days??value.calendar_days;
+  return `${range}${range&&days!=null?' · ':''}${days!=null?`有效 ${days} 天`:''}`||'数据窗口';
+}
+function aggregateFrequency(value){return value?.frequency==null?null:Number(value.frequency);}
+function normalizeSleepHours(value){
+  if(value==null||value==='')return null;
+  const parsed=Number(value);
+  return Number.isFinite(parsed)?parsed:null;
+}
+function changeComparisonText(change){
+  const c=change.comparison||{},before=aggregateFrequency(c.before),after=aggregateFrequency(c.after);
+  if(c.text)return c.text;
+  const parts=[];
+  if(before!=null&&after!=null){const delta=after-before;parts.push(`事件记录频率${Math.abs(delta)<0.005?'相近':`${delta>0?'增加':'减少'} ${fmt(Math.abs(delta),2)} 条目/小时`}`);}
+  if(c.minutes_delta!=null){const delta=Number(c.minutes_delta);parts.push(`平均使用${Math.abs(delta)<0.5?'相近':`${delta>0?'增加':'减少'} ${Math.round(Math.abs(delta))} 分钟`}`);}
+  return parts.length?`${parts.join('；')}。同期不代表因果。`:'前后数据不足，未形成可读比较；同期不代表因果。';
+}
+function renderFreshness(){
+  const r=reportData,p=r.current,v=r.patient||{},f=v.freshness||r.freshness||{};
+  const selected=f.selected_through||null,latest=f.latest_settled||v.latest_settled;
+  $('#patientFreshness').innerHTML=`<strong>${selected?`记录截至 ${escape(selected)}（设备日期）`:'本期间暂无已结算记录（设备日期）'}</strong>${latest&&latest!==selected?`<span>最近已结算记录 ${escape(latest)}</span>`:''}`;
+}
+function renderVariability(){
+  const target=$('#patientVariability'),v=reportData?.patient?.variability;
+  if(!target)return;
+  if(!v){target.textContent='波动：暂无可用说明';return;}
+  const pattern=({repeated:'多日达到关注线',occasional:'少数日期达到关注线',none:'未达到关注线',insufficient:'可计算记录不足'}[v.pattern]||'暂无可读说明');
+  const evaluable=v.evaluable_days??v.settled_days,high=v.high_days??0,short=v.short_days??0;
+  const facts=evaluable!=null?`${high}/${evaluable} 天达到关注线 · ${short} 天戴机不足 4 小时`:'';
+  const explanation=v.text&&v.text!==pattern?`<details class="variability-explain"><summary>查看波动说明</summary><p>${escape(v.text)}</p></details>`:'';
+  const dates=Array.isArray(v.review_dates)?v.review_dates.map(item=>typeof item==='string'?item:item?.date).filter(Boolean):[];
+  target.innerHTML=`<span class="variability-copy">${escape(facts||'波动：暂无可用天数')}</span><span class="variability-pattern">${escape(pattern)}（仅作筛选，不是临床判定）</span>${explanation}${dates.length?`<div class="variability-reviews"><span>复核：</span>${dates.slice(0,5).map(date=>`<button type="button" class="report-date" data-variability-day="${escape(date)}">${escape(date)}</button>`).join('')}${dates.length>5?`<span>等 ${dates.length} 天</span>`:''}</div>`:''}`;
+  target.querySelectorAll('[data-variability-day]').forEach(button=>button.onclick=()=>openDay(button.dataset.variabilityDay));
 }
 function renderProfessional() {
   const r=reportData,p=r.current,prev=r.previous;
@@ -22,7 +62,7 @@ function renderProfessional() {
   $('#reportWaves').innerHTML=r.wave_reviews.length?r.wave_reviews.map(d=>{
     if(d.error)return `<p>${d.date}：读取失败，${escape(d.error)}</p>`;
     const ipap=d.stats.ipap||{},epap=d.stats.epap||{},leak=d.stats.leak||{};
-    return `<div class="wave-review"><button class="report-date" data-review-day="${d.date}">${d.date} · 打开波形</button><span>保留约 ${duration(d.wave_seconds/60)}（每包按 1 秒计）/ 摘要 ${duration(d.summary_minutes)}（约 ${fmt(d.coverage==null?null:d.coverage*100,0)}%）</span><span>吸气压力 IPAP 中位 / P95：${fmt(ipap.median)} / ${fmt(ipap.p95)} cmH₂O</span><span>呼气压力 EPAP 中位 / P95：${fmt(epap.median)} / ${fmt(epap.p95)} cmH₂O</span><span>设备漏气中位 / P95：${fmt(leak.median)} / ${fmt(leak.p95)} L/min</span><span>${d.events_with_wave}/${d.events} 个事件分钟与波形有交集；${d.gaps.length} 个至少 5 分钟的无记录间隔。</span>${d.gaps.length?'<div>'+d.gaps.slice(0,5).map(g=>`<button class="outline" data-review-gap="${d.date}" data-start="${g.start}" data-end="${g.end}">${clock(g.start)}–${clock(g.end)}（${fmt(g.minutes,0)}分）</button>`).join(' ')+'</div>':''}</div>`;
+    return `<div class="wave-review"><button class="report-date" data-review-day="${d.date}">${d.date} · 打开波形</button><span>保留约 ${duration(d.wave_seconds/60)}（波形包名义按 1 秒计，不等于睡眠时长）/ 摘要 ${duration(d.summary_minutes)}（约 ${fmt(d.coverage==null?null:d.coverage*100,0)}%）</span><span>吸气压力 IPAP 中位 / P95：${fmt(ipap.median)} / ${fmt(ipap.p95)} cmH₂O</span><span>呼气压力 EPAP 中位 / P95：${fmt(epap.median)} / ${fmt(epap.p95)} cmH₂O</span><span>设备漏气中位 / P95：${fmt(leak.median)} / ${fmt(leak.p95)} L/min</span><span>${d.events_with_wave}/${d.events} 个事件分钟与波形有交集；${d.gaps.length} 个至少 5 分钟的无记录间隔。</span>${d.gaps.length?'<div>'+d.gaps.slice(0,5).map(g=>`<button class="outline" data-review-gap="${d.date}" data-start="${g.start}" data-end="${g.end}">${clock(g.start)}–${clock(g.end)}（${fmt(g.minutes,0)}分）</button>`).join(' ')+'</div>':''}</div>`;
   }).join(''):'<p class="small-note">优先复核的日期没有可用波形；未据此推测压力或漏气变化。</p>';
   $$('[data-review-day]').forEach(button=>{button.onclick=event=>{event.stopPropagation();openDay(button.dataset.reviewDay);};button.onkeydown=event=>{if(event.key==='Enter'){event.stopPropagation();openDay(button.dataset.reviewDay);}};});
   $$('[data-review-gap]').forEach(button=>button.onclick=async()=>{await openDay(button.dataset.reviewGap);if(dayKey===button.dataset.reviewGap&&detail)setWindow(Math.max(0,Number(button.dataset.start)-120),Math.min(86400,Number(button.dataset.end)+120));});
@@ -56,20 +96,23 @@ async function loadReport(force=false){
     $('#reportDownload').href='api/report.html?'+params;
     $('#mobilePdf').href='api/mobile.pdf?'+params;
     $('#mobileHtml').href='api/mobile.html?'+params;
-    $('#reportStatus').textContent=`${data.current.start} 至 ${data.current.end} · 最近已结算记录 ${data.patient.latest_settled||'暂无'} · 设备日期`;
+    const freshness=data.patient?.freshness||{};
+    const selectedThrough=freshness.selected_through||null;
+    $('#reportStatus').textContent=`查看范围 ${data.current.start} 至 ${data.current.end} · ${selectedThrough?`记录截至 ${selectedThrough}（设备日期）`:'本期间暂无已结算记录（设备日期）'}${freshness.latest_settled&&freshness.latest_settled!==selectedThrough?` · 最近已结算记录 ${freshness.latest_settled}`:''}`;
   }catch(error){if(seq===reportRequest){$('#reportStatus').textContent='读取失败：'+error.message;$('#reportContent').hidden=true;reportData=null;}}
   finally{if(seq===reportRequest){reportLoading=false;$('#reportContent').setAttribute('aria-busy','false');updateExportState();}}
 }
 function renderReport(){
   const r=reportData,p=r.current,v=r.patient,a=v.assessment;
   $('#reportContent').hidden=false;
-  $('#patientPeriod').textContent=`${p.calendar_days} 天治疗记录`;
+  $('#patientPeriod').textContent=`查看范围 ${p.start} 至 ${p.end} · ${p.calendar_days} 天治疗记录`;
+  renderFreshness();
   $('#patientTitle').textContent=v.title;$('#patientDetail').textContent=v.detail;$('#patientBoundary').textContent=v.boundary;
   $('#assessmentReasons').innerHTML=a.reasons.map(reason=>`<li>${escape(reason)}</li>`).join('');
   $('#assessmentConfidence').textContent=a.confidence_note;
   $('#assessmentRules').innerHTML=a.rules.map(rule=>`<li>${escape(rule)}</li>`).join('');
   $('#patientMetrics').innerHTML=`
-    <article class="panel patient-metric"><div>呼吸事件指数（估算） ${help('frequency')}</div><strong>${fmt(p.frequency,2)} <small>条目 / 小时</small></strong><span>${sumCounts(p.counts)} 条记录 ÷ ${fmt(p.total_minutes/60,1)} 戴机小时 · AHI ${help('ahi')}</span></article>
+    <article class="panel patient-metric"><div>呼吸事件指数（估算） ${help('frequency')}</div><strong>${fmt(p.frequency,2)} <small>条目 / 小时</small></strong><span>${sumCounts(p.counts)} 条记录 ÷ ${fmt(p.total_minutes/60,1)} 戴机小时 · AHI ${help('ahi')}</span><div id="patientVariability" class="patient-variability"></div></article>
     <article class="panel patient-metric assessment-metric" data-state="${a.state}"><div>初步判断 ${help('assessment')}</div><strong class="text-value">${escape(a.brief)}</strong><span>${escape(a.confidence)}</span></article>
     <article class="panel patient-metric"><div>平均每天戴机 ${help('usage')}</div><strong class="time-value">${duration(p.mean_minutes)}</strong><span>${p.use_days} 天记录到使用 / ${p.settled_days} 天可计算</span></article>`;
   renderPatientComparison();
@@ -77,10 +120,11 @@ function renderReport(){
   $('#patientFollowup').dataset.level=f.level;
   $('#patientFollowup').innerHTML=`<div class="eyebrow">需要找医生吗</div><h2>${escape(f.title)}</h2><p>${escape(f.reason)}</p><div class="next-step">${escape(f.action)}</div><button id="editFeelings" class="outline">${Object.values(r.context).some(x=>x==='yes'||x==='no')?'更新我的感受':'补充我的感受'}</button><details class="followup-why"><summary>为什么这样建议</summary><p>综合事件水平、趋势、佩戴和已填写的感受给出下一步。症状和安全问题优先；具体判断理由在上方“为什么这样判断”中。</p>${f.refs.map(id=>{const source=r.sources.find(s=>s.id===id);return source?`<a href="${escape(source.url)}" rel="noreferrer">${escape(source.title)}</a>`:'';}).join('<br>')}</details>`;
   $('#editFeelings').onclick=()=>{$('#contextPanel').open=true;$('#contextPanel').scrollIntoView({block:'start'});$('#sleepHours').focus({preventScroll:true});};
-  $('#patientCoverage').textContent=v.coverage+' 数据导入：'+r.imported_at?.replace('T',' ')+'。';
+  const importedAt=(v.freshness||r.freshness||{}).imported_at||r.imported_at;
+  $('#patientCoverage').textContent=v.coverage+' 数据导入：'+formatStamp(importedAt)+'。';
   $('#patientTypes').innerHTML=['OSA','CSA','HYP'].map(k=>`<div>${escape(v.glossary[k][0])} ${help(k)}<strong>${p.counts[k]} <small>条目</small></strong><span>${fmt(p.type_rates[k],2)} 条目 / 小时</span></div>`).join('');
   $('#patientGlossary').innerHTML=Object.values(v.glossary).map(([name,meaning])=>`<details class="glossary-item"><summary>${escape(name)}</summary><p>${escape(meaning)}</p></details>`).join('');
-  renderProfessional();renderContext();updateExportState();
+  renderVariability();renderProfessional();renderTreatment();renderContext();updateExportState();
 }
 function sumCounts(counts){return Object.values(counts).reduce((a,b)=>a+b,0);}
 function renderPatientComparison(){
@@ -103,13 +147,66 @@ function renderPatientComparison(){
   $('#patientTrendTable').innerHTML=`<table><thead><tr><th>日期</th><th>记录/小时</th><th>戴机时间</th></tr></thead><tbody>${points.map(d=>`<tr><td>${d.state==='settled'?`<button class="report-date" data-patient-day="${d.date}">${d.date}</button>`:d.date}</td><td>${d.frequency==null?(d.state==='pending'?'未结算':'—'):fmt(d.frequency,2)}</td><td>${duration(d.minutes)}</td></tr>`).join('')}</tbody></table>`;
   $$('[data-patient-day]').forEach(el=>{el.onclick=()=>openDay(el.dataset.patientDay);el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openDay(el.dataset.patientDay);}};});
 }
+function treatmentKindValue(){return document.querySelector('input[name="treatmentKind"]:checked')?.value||'other';}
+function setTreatmentKind(value){
+  const input=document.querySelector(`input[name="treatmentKind"][value="${CSS.escape(value||'other')}"]`)||document.querySelector('input[name="treatmentKind"][value="other"]');
+  if(input)input.checked=true;
+}
+function resetTreatmentForm(){
+  $('#treatmentId').value='';$('#treatmentDate').value=reportData?.current?.end||'';$('#treatmentNote').value='';setTreatmentKind('mask');
+  $('#treatmentEditorSummary').textContent='记录一项变化';$('#saveTreatment').textContent='保存变化';$('#cancelTreatment').hidden=true;
+}
+function renderChangeComparison(change){
+  const c=change.comparison||{},before=aggregateLabel(c.before),after=aggregateLabel(c.after),parts=[];
+  if(before)parts.push(`<span>前：${escape(before)}</span>`);
+  if(after)parts.push(`<span>后：${escape(after)}</span>`);
+  const sentence=changeComparisonText(change);
+  return `<div class="treatment-comparison"><div>${parts.join('')}</div><strong>${escape(sentence)}</strong></div>`;
+}
+function renderTreatment(){
+  const list=$('#treatmentList');if(!list)return;
+  const p=reportData.current,changes=(Array.isArray(reportData.treatment_changes)?reportData.treatment_changes:[]).filter(change=>change?.date&&change.date>=p.start&&change.date<=p.end).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  $('#treatmentPreview').textContent=changes.length?`${changes.length} 项变化 · 仅显示当前查看期间`:'可记录影响治疗体验的变化';
+  list.innerHTML=changes.length?changes.map(change=>`<article class="treatment-entry"><div class="treatment-entry-head"><div><time datetime="${escape(change.date)}">${escape(change.date)}</time><strong>${escape(change.kind_label||treatmentKinds[change.kind]||'其他')}</strong></div><div class="treatment-actions"><button type="button" class="outline" data-treatment-edit="${escape(change.id)}">编辑</button><button type="button" class="outline" data-treatment-delete="${escape(change.id)}">删除</button></div></div>${change.note?`<p class="treatment-note-text">${escape(change.note)}</p>`:''}${renderChangeComparison(change)}</article>`).join(''):'<p class="treatment-empty">当前期间还没有记录。可以手动记下面罩、医生调整、舒适设置或生活变化；它们只作为复诊时的日期线索。</p>';
+  $$('[data-treatment-edit]').forEach(button=>button.onclick=()=>editTreatment(button.dataset.treatmentEdit));
+  $$('[data-treatment-delete]').forEach(button=>button.onclick=()=>deleteTreatment(button.dataset.treatmentDelete));
+  if(treatmentStatusMessage){$('#treatmentStatus').textContent=treatmentStatusMessage;treatmentStatusMessage='';}
+}
+function editTreatment(id){
+  const change=(reportData.treatment_changes||[]).find(item=>String(item.id)===String(id));
+  if(!change)return;
+  $('#treatmentId').value=change.id;$('#treatmentDate').value=change.date||'';$('#treatmentNote').value=change.note||'';setTreatmentKind(change.kind);
+  $('#treatmentEditorSummary').textContent='编辑这项变化';$('#saveTreatment').textContent='保存修改';$('#cancelTreatment').hidden=false;$('#treatmentEditor').open=true;$('#treatmentDate').focus({preventScroll:true});
+}
+async function deleteTreatment(id){
+  const change=(reportData.treatment_changes||[]).find(item=>String(item.id)===String(id));
+  if(!change||!window.confirm(`删除 ${change.date} 的这项记录？`))return;
+  $('#treatmentStatus').textContent='正在删除…';
+  try{
+    await api('change/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:change.id})});
+    treatmentStatusMessage='已删除这项变化记录。';await loadReport(true);
+  }catch(error){$('#treatmentStatus').textContent='删除失败：'+error.message;}
+}
+function renderPreviousContext(){
+  const box=$('#previousContext');if(!box)return;
+  const previous=reportData?.previous_context;
+  if(!previous?.context){box.hidden=true;box.replaceChildren();return;}
+  box.hidden=false;
+  box.innerHTML=`<div class="previous-context-copy"><strong>上次感受</strong><span>来源期 ${escape(previous.start||'—')} 至 ${escape(previous.end||'—')} · 保存于 ${escape(previous.saved_at?formatStamp(previous.saved_at):'未记录')}</span></div><div class="previous-context-actions"><button type="button" class="outline" id="loadPreviousContext">载入上次感受</button><label><input type="checkbox" id="includePreviousNote">同时带入上次备注</label></div>`;
+  $('#loadPreviousContext').onclick=()=>{
+    const prior=previous.context||{},loaded={sleep_hours:normalizeSleepHours(prior.sleep_hours),note:$('#includePreviousNote').checked?(prior.note||''):''};
+    Object.keys(contextNames).forEach(key=>loaded[key]=prior[key]??'unknown');
+    contextDrafts.set(contextKey(),loaded);renderContext();$('#contextStatus').textContent='已载入上次感受；请逐项确认后点击“保存并更新建议”。';
+  };
+}
 function readForm(){
-  const context={sleep_hours:$('#sleepHours').value||null,note:$('#patientNote').value};
+  const context={sleep_hours:normalizeSleepHours($('#sleepHours').value.trim()),note:$('#patientNote').value};
   Object.entries(contextNames).forEach(([key,name])=>context[key]=contextValue(name));return context;
 }
 function renderContext(){
-  const key=reportKey(reportData),c=contextDrafts.get(key)||reportData.context;
+  const key=reportKey(reportData),c=contextDrafts.get(key)||reportData.context||{};
   $('#contextForm').dataset.period=key;
+  renderPreviousContext();
   $('#contextFields').innerHTML=`<label>平均每天睡多久（含午睡）<div><input id="sleepHours" type="number" min="0.1" max="24" step="0.1" placeholder="未填写" aria-label="自报平均睡眠小时"> 小时</div></label>`+Object.entries(reportData.patient.context_labels).map(([key,label])=>`<fieldset class="choice-field"><legend>${escape(label)}</legend><div class="choice-group" role="radiogroup" aria-label="${escape(label)}">${[['unknown','未填写'],['yes','是'],['no','否']].map(([value,text])=>`<label class="choice-option"><input type="radio" name="${contextNames[key]}" value="${value}"><span>${text}</span></label>`).join('')}</div></fieldset>`).join('');
   $('#sleepHours').value=c.sleep_hours??'';$('#patientNote').value=c.note;
   Object.entries(contextNames).forEach(([field,name])=>setContextValue(name,c[field]));
@@ -119,7 +216,8 @@ function renderContext(){
 }
 function updateDraftStatus(){
   const dirty=contextDrafts.has(contextKey());
-  $('#contextStatus').textContent=dirty?'有未保存的修改；建议和导出仍基于已保存内容。切换期间会暂存本次草稿。':'感受按本期间保存在本机。';
+  const saved=reportData?.context_saved_at;
+  $('#contextStatus').textContent=dirty?'有未保存的修改；建议和导出仍基于已保存内容。切换期间会暂存本次草稿。':saved?`感受按本期间保存在本机，已保存于 ${formatStamp(saved)}。`:'感受按本期间保存在本机。';
   $('#discardContext').hidden=!dirty;
   if(reportData)$('#contextPreview').textContent=dirty?'有未保存的修改，保存后可导出':reportData.patient.feeling;
   updateExportState();
@@ -137,6 +235,21 @@ $('#contextForm').onsubmit=async event=>{
   finally{$('#saveContext').disabled=false;updateExportState();}
 };
 $('#discardContext').onclick=()=>{contextDrafts.delete(contextKey());renderContext();};
+$('#treatmentForm').onsubmit=async event=>{
+  event.preventDefault();if(!reportData||reportLoading)return;
+  const id=$('#treatmentId').value.trim(),date=$('#treatmentDate').value,kind=treatmentKindValue(),note=$('#treatmentNote').value.trim();
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date)){$('#treatmentStatus').textContent='请选择真实的变化日期。';return;}
+  if(note.length>1000){$('#treatmentStatus').textContent='说明不能超过 1000 个字。';return;}
+  const body={date,kind,note};if(id)body.id=id;
+  $('#saveTreatment').disabled=true;$('#treatmentStatus').textContent='正在保存…';
+  try{
+    await api('change',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    treatmentStatusMessage=date>=dateRange[0]&&date<=dateRange[1]?'已保存这项变化。':'已保存；日期不在当前查看期间，请切换期间查看。';
+    resetTreatmentForm();$('#treatmentEditor').open=false;await loadReport(true);
+  }catch(error){$('#treatmentStatus').textContent='保存失败：'+error.message;}
+  finally{$('#saveTreatment').disabled=false;}
+};
+$('#cancelTreatment').onclick=()=>{resetTreatmentForm();$('#treatmentEditor').open=false;$('#treatmentStatus').textContent='';};
 $('#generateReport').onclick=()=>{
   const start=$('#reportStart').value,end=$('#reportEnd').value;
   if(!start||!end||start>end||start<overview.days[0].date||end>overview.days.at(-1).date){showError('请选择记录范围内有效的分析日期。');return;}
