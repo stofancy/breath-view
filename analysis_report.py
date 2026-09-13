@@ -237,7 +237,7 @@ def report_markdown(report):
     lines+=['','## 波形复核资料（有目的的抽样，不外推整个期间）','']
     for d in report['wave_reviews']:
         if 'error' in d:lines.append(f"- {d['date']}：读取失败");continue
-        lines.append(f"- {d['date']}：有效波形 {d['wave_seconds']} 秒；覆盖摘要时长约 {number(d['coverage']*100 if d['coverage'] is not None else None,0)}%；{len(d['gaps'])} 个至少 5 分钟的记录间隔；{d['events_with_wave']}/{d['events']} 个事件记录分钟与保留波形有交集。")
+        lines.append(f"- {d['date']}：保留波形约 {d['wave_seconds']} 秒（每包按 1 秒计）；相当于摘要时长约 {number(d['coverage']*100 if d['coverage'] is not None else None,0)}%；{len(d['gaps'])} 个至少 5 分钟的记录间隔；{d['events_with_wave']}/{d['events']} 个事件记录分钟与保留波形有交集。")
         for key,label in [('ipap','吸气压力 IPAP cmH2O'),('epap','呼气压力 EPAP cmH2O'),('leak','设备漏气 L/min')]:
             stat=d['stats'].get(key,{})
             lines.append(f"  - {label}：中位数 {number(stat.get('median'))}，P95 {number(stat.get('p95'))}。")
@@ -263,7 +263,7 @@ def report_html(report):
     for d in report['wave_reviews']:
         if 'error' in d:waves.append(f"<p>{e(d['date'])}：读取失败。</p>");continue
         ipap=d['stats'].get('ipap',{});epap=d['stats'].get('epap',{});leak=d['stats'].get('leak',{})
-        waves.append(f"<section><h3>{e(d['date'])}</h3><p>有效波形 {d['wave_seconds']} 秒；约为摘要时长 {number(d['coverage']*100 if d['coverage'] is not None else None,0)}%；{len(d['gaps'])} 个至少 5 分钟的无记录间隔。{d['events_with_wave']}/{d['events']} 个事件分钟与波形有交集。</p><p>吸气压力 IPAP 中位/P95 {number(ipap.get('median'))}/{number(ipap.get('p95'))} cmH₂O；呼气压力 EPAP 中位/P95 {number(epap.get('median'))}/{number(epap.get('p95'))} cmH₂O；设备漏气中位/P95 {number(leak.get('median'))}/{number(leak.get('p95'))} L/min。</p></section>")
+        waves.append(f"<section><h3>{e(d['date'])}</h3><p>保留波形约 {d['wave_seconds']} 秒（每包按 1 秒计）；约为摘要时长 {number(d['coverage']*100 if d['coverage'] is not None else None,0)}%；{len(d['gaps'])} 个至少 5 分钟的无记录间隔。{d['events_with_wave']}/{d['events']} 个事件分钟与波形有交集。</p><p>吸气压力 IPAP 中位/P95 {number(ipap.get('median'))}/{number(ipap.get('p95'))} cmH₂O；呼气压力 EPAP 中位/P95 {number(epap.get('median'))}/{number(epap.get('p95'))} cmH₂O；设备漏气中位/P95 {number(leak.get('median'))}/{number(leak.get('p95'))} L/min。</p></section>")
     sources=''.join(f"<li><a href='{e(s['url'])}' rel='noreferrer'>{e(s['title'])}</a></li>" for s in SOURCES)
     return f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PAP 治疗记录分析 {e(p['start'])} — {e(p['end'])}</title>
 <style>body{{font:13px/1.8 "Noto Sans CJK SC",sans-serif;color:#20374a;max-width:950px;margin:28px auto;padding:0 24px}}h1{{font-size:23px;margin:0}}h2{{font-size:17px;border-bottom:1px solid #bbc9d3;margin-top:24px}}h3{{font-size:14px;margin:12px 0 5px}}p{{margin:5px 0}}.meta,.note{{font-size:11px;color:#637988}}.summary{{background:#edf3f7;border-left:3px solid #44789a;padding:12px;margin:15px 0}}table{{width:100%;border-collapse:collapse;font-size:12px}}th,td{{border:1px solid #d5dfe6;padding:7px;text-align:left}}th{{background:#f1f5f8;font-weight:500}}section{{break-inside:avoid;border-bottom:1px solid #e0e5e9;padding-bottom:9px}}.self{{white-space:pre-wrap}}a{{color:#225f89}}@page{{size:A4;margin:16mm}}@media print{{body{{margin:0;padding:0;font-size:11px;max-width:none}}.print-hint{{display:none}}h2{{break-after:avoid}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}</style>
