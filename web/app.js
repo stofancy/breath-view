@@ -10,7 +10,7 @@ const channels = {
   rate: {name:'呼吸频率',unit:'次/min',color:'#84709a',height:95}
 };
 const eventNames = {OSA:'阻塞性暂停',CSA:'中枢性暂停',HYP:'低通气'};
-let overview = null, activeView = 'detail', detail = null, dayKey = null;
+let overview = null, activeView = 'report', detail = null, dayKey = null;
 let dateRange = null, windowRange = null, fullRange = null, requestId = 0;
 let rowLimit = 40, eventFilter = 'all', selectedEvent = null, cursor = null;
 let plots = [], cursorFrame = null;
@@ -47,10 +47,11 @@ function switchView(view) {
     button.classList.toggle('active', button.dataset.view === view);
     button.setAttribute('aria-current', button.dataset.view === view ? 'page' : 'false');
   });
-  $('#title').textContent = {detail:'每日详情',overview:'期间统计',data:'数据管理'}[view];
-  $('#export').textContent = {detail:'导出当天摘要',overview:'导出期间摘要',data:'导出全部摘要'}[view];
+  $('#title').textContent = {report:'分析报告',detail:'每日详情',overview:'期间统计',data:'数据管理'}[view];
+  $('#export').textContent = {report:'导出分析期间摘要',detail:'导出当天摘要',overview:'导出期间摘要',data:'导出全部摘要'}[view];
   showError();
   if (overview && view === 'overview') renderOverview();
+  if (overview && view === 'report') loadReport();
   if (overview && view === 'detail' && !dayKey) {
     openDay([...overview.days].reverse().find(day => day.wave)?.date || overview.days.at(-1).date);
   }
@@ -345,7 +346,7 @@ function renderInfo() {
 }
 function exportCSV(event) {
   if(!overview){event.preventDefault();return;}
-  const range=activeView==='detail'?[dayKey,dayKey]:activeView==='overview'?dateRange:[overview.days[0].date,overview.days.at(-1).date];
+  const range=activeView==='detail'?[dayKey,dayKey]:['overview','report'].includes(activeView)?dateRange:[overview.days[0].date,overview.days.at(-1).date];
   $('#export').href='api/export?'+new URLSearchParams({start:range[0],end:range[1]});
 }
 
@@ -404,4 +405,3 @@ document.onkeydown=event=>{
   if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();panWindow(event.key==='ArrowLeft'?-1:1);}
 };
 let resizeTimer;window.onresize=()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(redraw,120);};
-refresh();

@@ -3,9 +3,10 @@
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-import argparse, csv, io, json, secrets, threading, sys
+import argparse, csv, io, json, secrets, threading, sys, os
 from datetime import date
 from storage import load, import_card, DEFAULT_HOME
+from analysis_report import build_report, report_markdown, report_html, validate_context, period
 
 ROOT=Path(__file__).resolve().parent
 
@@ -15,6 +16,26 @@ class Application:
         self.data=load(self.home)
         self.lock=threading.RLock()
         self.status={'busy':False,'message':'就绪','error':None}
+    def context_key(self,start,end):
+        period(start,end)
+        if not self.data:raise ValueError('请先导入设备数据')
+        return self.data.catalog['device']['serial']+'|'+start+'|'+end
+    def read_contexts(self):
+        path=self.home/'patient-contexts.json'
+        return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    def get_context(self,start,end):
+        return self.read_contexts().get(self.context_key(start,end),{})
+    def save_context(self,start,end,value):
+        with self.lock:
+            key=self.context_key(start,end)
+            values=self.read_contexts()
+            values[key]=validate_context(value)
+            self.home.mkdir(parents=True,exist_ok=True,mode=0o700)
+            temp=self.home/'patient-contexts.tmp'
+            with temp.open('w',encoding='utf-8') as stream:
+                os.chmod(temp,0o600)
+                json.dump(values,stream,ensure_ascii=False,allow_nan=False)
+            os.replace(temp,self.home/'patient-contexts.json')
     def start_import(self,path):
         with self.lock:
             if self.status['busy']:raise ValueError('正在导入，请稍候')
@@ -60,6 +81,14 @@ def serve(app,port=0):
                     with app.lock:
                         if not app.data:return self.respond({'empty':True})
                         if route=='api/overview':return self.respond(app.data.overview())
+                        if route in ('api/report','api/report.md','api/report.html'):
+                            start=q.get('start',[''])[0];end=q.get('end',[''])[0]
+                            report=build_report(app.data,start,end,app.get_context(start,end))
+                            if route.endswith('.html'):
+                                return self.respond(report_html(report).encode(),kind='text/html; charset=utf-8',filename=f'pap-review-{start}-{end}.html')
+                            if route.endswith('.md'):
+                                return self.respond(report_markdown(report).encode(),kind='text/markdown; charset=utf-8',filename=f'pap-review-{start}-{end}.md')
+                            return self.respond(report)
                         if route=='api/day':return self.respond(app.data.detail(q.get('date',[''])[0],q.get('start',[None])[0],q.get('end',[None])[0]))
                         if route=='api/export':
                             days=app.data.overview()['days']
@@ -73,7 +102,7 @@ def serve(app,port=0):
                                     w.writerow([d['date'],d['minutes'],*[d['counts'][k] for k in ('OSA','CSA','HYP')],d['index'],'有' if d['wave'] else '无','未结算' if d['current'] else '已结算'])
                             return self.respond(('\ufeff'+s.getvalue()).encode(),kind='text/csv; charset=utf-8',filename=f'breath-summary-{start}-{end}.csv')
                     return self.respond({'error':'Not found'},404)
-                assets={'':('index.html','text/html; charset=utf-8'),'app.js':('app.js','text/javascript; charset=utf-8'),'style.css':('style.css','text/css; charset=utf-8'),'icon.svg':('icon.svg','image/svg+xml')}
+                assets={'':('index.html','text/html; charset=utf-8'),'app.js':('app.js','text/javascript; charset=utf-8'),'report.js':('report.js','text/javascript; charset=utf-8'),'style.css':('style.css','text/css; charset=utf-8'),'icon.svg':('icon.svg','image/svg+xml')}
                 if route not in assets:return self.respond({'error':'Not found'},404)
                 name,kind=assets[route]
                 return self.respond((ROOT/'web'/name).read_bytes(),kind=kind)
@@ -81,16 +110,20 @@ def serve(app,port=0):
         def do_POST(self):
             route,q=self.route()
             # Random capability URL + no CORS + same-origin JSON requests.
-            if route!='api/import':return self.respond({'error':'Not found'},404)
+            if route not in ('api/import','api/context'):return self.respond({'error':'Not found'},404)
             if self.headers.get('Content-Type')!='application/json':return self.respond({'error':'JSON required'},415)
             origin=self.headers.get('Origin')
             if origin and origin!=f'http://127.0.0.1:{self.server.server_port}':return self.respond({'error':'Forbidden'},403)
             try:
                 n=int(self.headers.get('Content-Length','0'))
                 if not 0<n<8192:raise ValueError('请求长度无效')
-                payload=json.loads(self.rfile.read(n));app.start_import(payload['path'])
-                self.respond({'started':True})
-            except (ValueError,KeyError,TypeError) as e:self.respond({'error':str(e)},400)
+                payload=json.loads(self.rfile.read(n))
+                if route=='api/import':
+                    app.start_import(payload['path']);self.respond({'started':True})
+                else:
+                    app.save_context(payload['start'],payload['end'],payload['context'])
+                    self.respond({'saved':True})
+            except (ValueError,KeyError,TypeError,OSError) as e:self.respond({'error':str(e)},400)
     server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
     server.daemon_threads=True
     threading.Thread(target=server.serve_forever,daemon=True).start()
@@ -119,7 +152,7 @@ def main():
     from PySide6.QtWebEngineWidgets import QWebEngineView
     from PySide6.QtWebEngineCore import QWebEnginePage,QWebEngineProfile
     from PySide6.QtCore import QUrl
-    from PySide6.QtGui import QAction,QIcon
+    from PySide6.QtGui import QAction,QIcon,QDesktopServices
     qt=QApplication(sys.argv)
     qt.setApplicationName('息览 · Breath View')
     qt.setWindowIcon(QIcon(str(ROOT/'web/icon.svg')))
@@ -127,9 +160,18 @@ def main():
     view=QWebEngineView()
     # Off-the-record profile: no medical data left in an embedded browser cache.
     profile=QWebEngineProfile(view)
-    page=QWebEnginePage(profile,view);view.setPage(page)
+    class LocalPage(QWebEnginePage):
+        def acceptNavigationRequest(self,target,kind,is_main):
+            if target.scheme() in ('http','https') and target.host()!='127.0.0.1':
+                QDesktopServices.openUrl(target)
+                return False
+            return super().acceptNavigationRequest(target,kind,is_main)
+    page=LocalPage(profile,view);view.setPage(page)
     def download(item):
-        target,_=QFileDialog.getSaveFileName(win,'导出使用记录',str(Path.home()/'Documents/呼吸机使用记录.csv'),'CSV (*.csv)')
+        suggested=Path(item.downloadFileName() or 'breath-export.csv').name
+        suffix=Path(suggested).suffix.lower()
+        file_filter={'.html':'HTML 报告 (*.html)','.md':'Markdown 报告 (*.md)','.csv':'CSV 摘要 (*.csv)'}.get(suffix,'所有文件 (*)')
+        target,_=QFileDialog.getSaveFileName(win,'保存报告或摘要',str(Path.home()/'Documents'/suggested),file_filter)
         if target:
             item.setDownloadDirectory(str(Path(target).parent));item.setDownloadFileName(Path(target).name);item.accept()
     profile.downloadRequested.connect(download)
