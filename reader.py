@@ -8,6 +8,21 @@ import numpy as np
 VERSION = 1
 EVENTS = {0x83: 'OSA', 0x84: 'HYP', 0x87: 'CSA'}
 
+# OSCAR's BMC legacy packet layout identifies byte 0x04 as EPAP and byte 0x06
+# as IPAP.  Keep ``pressure`` as the historical API name for the 0x04 channel;
+# callers can use the explicit names for new output.  Both raw channels use the
+# same /2 scale.  The external channel meaning still needs manufacturer
+# verification; see FORMAT.md.
+WAVEFORM_FIELDS = {
+    'pressure': (2, 2),  # compatibility alias for raw byte 0x04 (EPAP)
+    'epap': (2, 2),      # raw byte 0x04
+    'ipap': (3, 2),       # raw byte 0x06
+    'leak': (98, 10),
+    'tidal': (99, 1),
+    'ventilation': (101, 10),
+    'rate': (104, 1),
+}
+
 
 def packed_date(n):
     return datetime(2000 + (n >> 9), (n >> 5) & 15, n & 31, 12)
@@ -203,8 +218,7 @@ class Dataset:
         # All units below are documented mappings; pressure sensor ADC is not
         # mislabeled as cmH2O. No guessed SpO2, snore or sleep-stage output.
         words = a.copy().view('<u2').reshape(-1,128)
-        fields = {'pressure':(2,2),'leak':(98,10),'tidal':(99,1),'ventilation':(101,10),'rate':(104,1)}
-        for name,(offset,scale) in fields.items():
+        for name,(offset,scale) in WAVEFORM_FIELDS.items():
             values = words[:,offset].astype(float)/scale
             # 0xffff is a missing value, never a physiologic measurement.
             values[words[:,offset] == 65535] = np.nan
@@ -243,7 +257,7 @@ class Dataset:
                     j+=1
                 out.append([round(float(xx),3),round(float(yy),2) if np.isfinite(yy) else None])
             return out
-        for name,(offset,scale) in fields.items():
+        for name,(offset,scale) in WAVEFORM_FIELDS.items():
             v=w[:,offset].astype(float)/scale
             v[w[:,offset]==65535]=np.nan
             d['series'][name]=reduce_points(st,v)
