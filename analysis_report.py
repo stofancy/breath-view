@@ -153,7 +153,7 @@ def build_report(dataset,start,end,context=None,changes=None):
                 ('ATS-PAP',))
         finding('events','呼吸事件水平与后续关注',
                 f"共 {sum(current['counts'].values())} 条事件记录，按使用时间加权为 {number(current['frequency'])} 条目/小时；OSA {current['counts']['OSA']}、CSA {current['counts']['CSA']}、HYP {current['counts']['HYP']}。",
-                '这些是设备条目，可能按分钟聚合；没有脑电睡眠时间和独立血氧数据，不能换算为已验证的临床 AHI，也不能据此排除残余睡眠呼吸问题。',
+                '设备事件和摘要时长已与 OSCAR 底层解析交叉核对；没有脑电睡眠时间和独立血氧数据，不能换算为已验证的临床 AHI，也不能据此排除残余睡眠呼吸问题。',
                 '复诊时将事件较集中的日期与症状、原厂报告和相应波形一起核对。需要复查睡眠监测与否由医生结合持续症状及无法解释的设备数据判断。',
                 ('ATS2013','AASM2021'))
     # Transparent engineering gate for descriptive comparison; no clinical cutoff.
