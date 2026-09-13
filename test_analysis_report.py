@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from analysis_report import aggregate, build_report, report_html, validate_context
 from app import Application
+from patient_summary import compare, previous_year
+from portable_report import mobile_html
 
 
 def row(day,minutes,osa=0,current=False):
@@ -36,5 +38,46 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual((Path(temp)/'patient-contexts.json').stat().st_mode&0o777,0o600)
         for value in [float('nan'),float('inf'),0,25]:
             with self.assertRaises(ValueError):validate_context({'sleep_hours':value})
+
+    def test_patient_advice_prioritizes_symptoms_over_low_device_values(self):
+        rows=[row('2026-09-01',360,0)]
+        ds=SimpleNamespace(catalog={'device':{'model':'TEST'}},overview=lambda:{'days':rows})
+        from analysis_report import CONTEXT_FIELDS
+        clear={key:'no' for key in CONTEXT_FIELDS}
+        for field,level in [('unrefreshed','review'),('gasping','review'),('drowsy_driving','priority'),('mask_off','support')]:
+            with self.subTest(field=field):
+                r=build_report(ds,'2026-09-01','2026-09-01',clear|{field:'yes'})
+                self.assertEqual(r['patient']['followup']['level'],level)
+                self.assertIsNone(r['patient']['ahi']['value'])
+        unknown=build_report(ds,'2026-09-01','2026-09-01')
+        self.assertEqual(unknown['patient']['followup']['level'],'unknown')
+
+    def test_patient_comparison_zero_baseline_missing_and_calendar_alignment(self):
+        a={'settled_days':7,'calendar_days':7,'frequency':0,'mean_minutes':360}
+        b=a|{'frequency':2,'mean_minutes':300}
+        self.assertEqual(compare(b,a)['direction'],'up')
+        self.assertIsNone(compare(b,a)['percent'])
+        self.assertFalse(compare(a,b|{'settled_days':2})['eligible'])
+        self.assertFalse(compare(a,b,overlap=True)['eligible'])
+        self.assertEqual(previous_year('2024-02-29'),'2023-02-28')
+        # Rising vs previous but falling vs year must remain distinct.
+        rows=[row(f'2025-09-{n:02}',360,24) for n in range(1,8)]+[row(f'2026-08-{n:02}',360,6) for n in range(25,32)]+[row(f'2026-09-{n:02}',360,12) for n in range(1,8)]
+        ds=SimpleNamespace(catalog={'device':{'model':'TEST'}},overview=lambda:{'days':rows})
+        r=build_report(ds,'2026-09-01','2026-09-07')
+        self.assertEqual(r['patient']['comparisons']['previous']['direction'],'up')
+        self.assertEqual(r['patient']['comparisons']['year']['direction'],'down')
+
+    def test_mobile_export_escapes_notes_and_keeps_unknowns_and_metric_limits(self):
+        rows=[row('2026-09-01',360,0),row('2026-09-02',None,20,True)]
+        ds=SimpleNamespace(catalog={'device':{'model':'TEST'}},overview=lambda:{'days':rows})
+        r=build_report(ds,'2026-09-01','2026-09-03',{'note':'<img src=x onerror=alert(1)>健康备注'})
+        exported=mobile_html(r)
+        self.assertNotIn('<img',exported)
+        self.assertIn('&lt;img',exported)
+        self.assertIn('未填写',exported)
+        self.assertIn('暂无法确认',exported)
+        self.assertNotIn('<script',exported)
+        self.assertEqual([p['state'] for p in r['patient']['trend']],['settled','pending','missing'])
+        self.assertIsNone(r['patient']['trend'][1]['frequency'])
 
 if __name__=='__main__':unittest.main()

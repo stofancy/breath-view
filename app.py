@@ -3,11 +3,12 @@
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-import argparse, csv, io, json, secrets, threading, sys, os, logging, time
+import argparse, csv, io, json, secrets, threading, sys, os, logging, time, subprocess
 from logging.handlers import RotatingFileHandler
 from datetime import date
 from storage import load, import_card, DEFAULT_HOME
 from analysis_report import build_report, report_markdown, report_html, validate_context, period
+from portable_report import mobile_html, mobile_pdf
 
 ROOT=Path(__file__).resolve().parent
 LOG_NAME='breath-view.log'
@@ -107,6 +108,18 @@ def serve(app,port=0):
             if route is None:return self.respond({'error':'Not found'},404)
             try:
                 if route=='api/status':return self.respond(app.status)
+                # Build a consistent snapshot under the data lock, then release it
+                # before starting PDF rendering so navigation stays responsive.
+                if route in ('api/mobile.html','api/mobile.pdf'):
+                    with app.lock:
+                        if not app.data:raise ValueError('请先导入设备数据')
+                        start=q.get('start',[''])[0];end=q.get('end',[''])[0]
+                        report=build_report(app.data,start,end,app.get_context(start,end))
+                    if route.endswith('.pdf'):
+                        logging.info('mobile pdf export started start=%s end=%s',start,end)
+                        raw=mobile_pdf(report)
+                        return self.respond(raw,kind='application/pdf',filename=f'pap-phone-{start}-{end}.pdf')
+                    return self.respond(mobile_html(report).encode(),kind='text/html; charset=utf-8',filename=f'pap-phone-{start}-{end}.html')
                 if route.startswith('api/'):
                     with app.lock:
                         if not app.data:return self.respond({'empty':True})
@@ -136,7 +149,7 @@ def serve(app,port=0):
                 if route not in assets:return self.respond({'error':'Not found'},404)
                 name,kind=assets[route]
                 return self.respond((ROOT/'web'/name).read_bytes(),kind=kind)
-            except (ValueError,OSError,KeyError) as e:
+            except (ValueError,OSError,KeyError,subprocess.TimeoutExpired) as e:
                 logging.exception('GET failed route=%s',route)
                 self.respond({'error':str(e)},400)
         def do_POST(self):
@@ -220,9 +233,12 @@ def main():
     def download(item):
         suggested=Path(item.downloadFileName() or 'breath-export.csv').name
         suffix=Path(suggested).suffix.lower()
-        file_filter={'.html':'HTML 报告 (*.html)','.md':'Markdown 报告 (*.md)','.csv':'CSV 摘要 (*.csv)'}.get(suffix,'所有文件 (*)')
+        file_filter={'.pdf':'手机 PDF (*.pdf)','.html':'HTML 报告 (*.html)','.md':'Markdown 报告 (*.md)','.csv':'CSV 摘要 (*.csv)'}.get(suffix,'所有文件 (*)')
+        logging.info('download save dialog opened filename=%s',suggested)
         target,_=QFileDialog.getSaveFileName(win,'保存报告或摘要',str(Path.home()/'Documents'/suggested),file_filter)
+        logging.info('download save dialog closed selected=%s',bool(target))
         if target:
+            item.stateChanged.connect(lambda state:logging.info('download state=%s filename=%s',state,suggested))
             item.setDownloadDirectory(str(Path(target).parent));item.setDownloadFileName(Path(target).name);item.accept()
     profile.downloadRequested.connect(download)
     win.setCentralWidget(view)

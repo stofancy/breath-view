@@ -4,14 +4,23 @@ from statistics import median
 import math
 import html
 
-RULE_VERSION = '1.0'
+RULE_VERSION = '2.0'
 SOURCES = [
+    {'id':'NIH-LIVING','title':'NIH · 睡眠呼吸暂停随访与困倦驾驶','url':'https://www.nhlbi.nih.gov/health/sleep-apnea/living-with'},
+    {'id':'NIH-AHI','title':'MedlinePlus · 睡眠监测与 AHI 的含义','url':'https://medlineplus.gov/ency/article/003932.htm'},
     {'id':'AASM2021','title':'AASM 2021 · OSA 长期管理与复查睡眠监测','url':'https://pmc.ncbi.nlm.nih.gov/articles/PMC8314660/'},
     {'id':'ATS2013','title':'ATS 2013 · PAP 使用记录、残余事件与漏气的解释','url':'https://www.thoracic.org/statements/resources/sleep-medicine/CPAP-Adherence-Tracking-Systems.pdf'},
     {'id':'ATS-PAP','title':'ATS · 成人 OSA 的 PAP 治疗与全睡眠时段使用','url':'https://site.thoracic.org/advocacy-patients/patient-resources/positive-airway-pressure-cpap-and-bpap-for-adults-with-obstructive-sleep-apnea'},
     {'id':'ATS-MASK','title':'ATS · PAP 面罩与使用问题的处理','url':'https://site.thoracic.org/advocacy-patients/patient-resources/pap-therapy-quick-tips-for-troubleshooting-to-address-problems-with-use'},
 ]
-CONTEXT_FIELDS = {'sleepiness':'白天困倦持续或加重','mask_problem':'面罩漏气、噪声或口鼻干燥影响使用','mask_off':'睡眠中摘机或醒后未重新戴机'}
+CONTEXT_FIELDS = {
+    'unrefreshed':'睡醒后经常仍不解乏',
+    'sleepiness':'白天困倦持续或加重',
+    'mask_problem':'面罩漏气、噪声或口鼻干燥影响使用',
+    'mask_off':'睡眠中摘机或醒后未重新戴机',
+    'gasping':'戴机后仍反复憋醒或被发现呼吸暂停',
+    'drowsy_driving':'开车或操作设备时困得难以保持清醒',
+}
 
 
 def period(start,end):
@@ -194,6 +203,13 @@ def build_report(dataset,start,end,context=None):
         elif not report['context_complete']:summary+='目前缺少完整症状自述，尚不能判断治疗是否充分或症状是否缓解。'
         else:summary+='自述未报告上述困倦或佩戴问题；仍不能单凭本软件数据判定 OSA 已控制。'
         summary+=f"只有 {current['wave_days']} 天有保留波形，以下复核资料不代表全部夜间情况。"
+    for key in ('unrefreshed','gasping','drowsy_driving'):
+        if context[key]=='yes':
+            finding('symptom_'+key,'需要关注：'+CONTEXT_FIELDS[key],
+                    '本期间自述：'+CONTEXT_FIELDS[key]+'。',
+                    '设备数字不能代替症状评估。',
+                    '困倦时不要驾驶或操作危险设备，尽快联系医生评估。' if key=='drowsy_driving' else '联系睡眠门诊，核对治疗覆盖及持续症状的原因。',
+                    ('NIH-LIVING',) if key=='drowsy_driving' else ('AASM2021',))
     report['summary']=summary
     report['questions']=[
         '设备原厂报告中的 AHI 和事件类型，与这里的 USR 条目频率是否一致？',
@@ -201,6 +217,8 @@ def build_report(dataset,start,end,context=None):
         '面罩贴合、管路、干燥或噪声是否影响使用？原厂漏气读数如何定义？',
         '若仍困倦或症状再次出现，是否需要进一步评估，或由医生安排复查睡眠监测？'
     ]
+    from patient_summary import patient_summary
+    report['patient']=patient_summary(report,rows)
     return report
 
 

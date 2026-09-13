@@ -76,7 +76,8 @@ function switchView(view) {
     button.classList.toggle('active', button.dataset.view === view);
     button.setAttribute('aria-current', button.dataset.view === view ? 'page' : 'false');
   });
-  $('#title').textContent = {report:'分析报告',detail:'每日详情',overview:'期间统计',data:'数据管理'}[view];
+  $('#title').textContent = {report:'我的睡眠',detail:'每日详情',overview:'期间统计',data:'数据管理'}[view];
+  $('#export').hidden = view === 'report';
   $('#export').textContent = {report:'导出分析期间摘要',detail:'导出当天摘要',overview:'导出期间摘要',data:'导出全部摘要'}[view];
   showError();
   if (overview && view === 'overview') renderOverview();
@@ -109,14 +110,14 @@ async function refresh() {
     const bad = overview.files.filter(file => file.unreadable_ranges?.length);
     $('#notice').hidden = !bad.length;
     const bytes = bad.reduce((sum,file) => sum+file.unreadable_ranges.reduce((s,r) => s+r[1],0),0);
-    $('#notice').textContent = `数据完整性：${bad.length} 个波形文件发生读取错误，${fmt(bytes/1024/1024,0)} MiB 未能读取。缺失区间不显示曲线。详情见“数据管理”。`;
+    $('#notice').textContent = '部分波形未能读取，相关时段无法回看；已读取的摘要仍可查看。详情见“数据管理”。';
     switchView(activeView);
   } catch (error) { showError(error.message); }
 }
 
 // Summary calculations distinguish missing records, current records and zero usage.
 function presetRange(days, render=true) {
-  const end = overview.days.at(-1).date;
+  const end = [...overview.days].reverse().find(day=>!day.current&&day.minutes!=null)?.date || overview.days.at(-1).date;
   const start = new Date(end+'T12:00:00Z');
   if (days) start.setUTCDate(start.getUTCDate()-days+1);
   else start.setTime(new Date(overview.days[0].date+'T12:00:00Z').getTime());
