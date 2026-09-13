@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libegl1 libopen
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY app.py storage.py reader.py analysis_report.py patient_summary.py i18n.py portable_report.py ./
+COPY app.py storage.py reader.py analysis_report.py patient_summary.py i18n.py portable_report.py patient_journal.py ./
 COPY web ./web
 ENV QT_QPA_PLATFORM=offscreen PYTHONUNBUFFERED=1
 EXPOSE 8080

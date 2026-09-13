@@ -20,6 +20,8 @@ and prepares a cautious, evidence-linked follow-up summary.
   days and missing waveforms kept distinct.
 - **Offline exports** — CSV, a self-contained HTML review and a phone-sized
   HTML/PDF summary.
+- **Patient timeline** — optional, device-scoped treatment-change notes with
+  equal seven-day comparison windows and explicit non-causal wording.
 - **Two interface locales** — Chinese (`zh-CN`) and English (`en-US`), with
   the selected language saved locally in the browser.
 
@@ -129,3 +131,8 @@ The software only exposes conservative, estimated device-entry metrics. It is
 not a diagnostic tool, does not establish clinical AHI, and must not be used
 to change treatment settings. Keep real health data and deployment secrets out
 of the public repository.
+
+Patient-recorded treatment changes are stored separately with private file
+permissions and are isolated by device. The public UI and exports show only
+the selected period; comparison windows remain descriptive and do not infer
+causation.

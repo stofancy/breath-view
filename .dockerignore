@@ -10,3 +10,4 @@
 !portable_report.py
 !web/
 !web/**
+!patient_journal.py

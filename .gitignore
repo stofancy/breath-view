@@ -11,6 +11,8 @@ catalog.json
 access-token
 patient-contexts.json
 patient-contexts.tmp
+patient-changes.json
+.patient-changes-*
 current.tmp
 .upload-*
 .import-*
