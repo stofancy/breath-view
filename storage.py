@@ -7,7 +7,7 @@ from reader import parse_usr, index_waveforms, Dataset, VERSION
 DEFAULT_HOME = Path.home()/'.local/share/breath-view'
 
 
-def import_card(source, home=DEFAULT_HOME, progress=lambda x:None):
+def import_card(source, home=DEFAULT_HOME, progress=lambda x:None, source_label=None):
     source=Path(source).expanduser().resolve()
     home=Path(home).resolve()
     if not source.is_dir():
@@ -22,7 +22,7 @@ def import_card(source, home=DEFAULT_HOME, progress=lambda x:None):
         paths=[files[0]]+sorted(source.glob(files[0].stem+'.[0-9][0-9][0-9]'))
         manifest=[]
         for i,p in enumerate(paths):
-            progress(f'复制到电脑 {i+1}/{len(paths)} · {p.name}')
+            progress(f'保存数据 {i+1}/{len(paths)} · {p.name}')
             before=p.stat()
             digest=hashlib.sha256()
             unreadable=[]
@@ -52,7 +52,7 @@ def import_card(source, home=DEFAULT_HOME, progress=lambda x:None):
         for date in spans:
             days.setdefault(date,{'date':date,'minutes':None,'events':[],'current':True})
         catalog={'version':VERSION,'device':info,'days':days,'spans':spans,'invalid_packets':invalid,
-                 'imported_at':datetime.now().isoformat(timespec='seconds'),'source':str(source),'files':manifest}
+                 'imported_at':datetime.now().isoformat(timespec='seconds'),'source':source_label or str(source),'files':manifest}
         (stage/'catalog.json').write_text(json.dumps(catalog,ensure_ascii=False),encoding='utf-8')
         # Publish only after all files and decoding succeed. Keep previous snapshot
         # until the pointer switches; failed imports leave the previous one usable.
@@ -76,3 +76,46 @@ def load(home=DEFAULT_HOME):
     catalog=json.loads((folder/'catalog.json').read_text(encoding='utf-8'))
     if catalog['version']!=VERSION:raise ValueError('需要重新导入以更新数据格式')
     return Dataset(folder,catalog)
+
+
+MAX_ARCHIVE_BYTES = 8 * 1024**3
+
+
+def import_source(source, home=DEFAULT_HOME, progress=lambda x: None):
+    """Accept a card folder, its USR entry, or a ZIP; never extract arbitrary paths."""
+    import zipfile, stat, re
+    from pathlib import PurePosixPath
+    source = Path(source).expanduser().resolve()
+    if source.is_dir():
+        return import_card(source, home, progress)
+    if source.suffix.lower() == '.usr':
+        return import_card(source.parent, home, progress)
+    if source.suffix.lower() != '.zip':
+        raise ValueError('请选择数据文件夹、.USR 文件或 ZIP 压缩包')
+    Path(home).mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        with zipfile.ZipFile(source) as archive, tempfile.TemporaryDirectory(prefix='.unzip-', dir=home) as temp:
+            entries = archive.infolist()
+            if len(entries) > 10000 or sum(x.file_size for x in entries) > MAX_ARCHIVE_BYTES:
+                raise ValueError('压缩包展开后不能超过 8 GiB 或 10000 个文件')
+            for entry in entries:
+                path = PurePosixPath(entry.filename)
+                if path.is_absolute() or '..' in path.parts or '\\' in entry.filename or stat.S_ISLNK(entry.external_attr >> 16):
+                    raise ValueError('压缩包包含不安全的路径或符号链接')
+            users = [x for x in entries if not x.is_dir() and PurePosixPath(x.filename).suffix.lower() == '.usr' and '__MACOSX' not in PurePosixPath(x.filename).parts]
+            if len(users) != 1:
+                raise ValueError('ZIP 中必须恰好有一个 .USR 文件，请只压缩一张 SD 卡的数据')
+            usr = PurePosixPath(users[0].filename)
+            selected = [x for x in entries if PurePosixPath(x.filename).parent == usr.parent and (x is users[0] or re.fullmatch(re.escape(usr.stem) + r'\.[0-9]{3}', PurePosixPath(x.filename).name))]
+            names = set()
+            for i, entry in enumerate(selected):
+                name = PurePosixPath(entry.filename).name
+                if name.lower() in names:
+                    raise ValueError('压缩包包含重复的数据文件')
+                names.add(name.lower())
+                progress(f'解压 {i+1}/{len(selected)} · {name}')
+                with archive.open(entry) as src, (Path(temp)/name).open('wb') as dst:
+                    shutil.copyfileobj(src, dst, 1024*1024)
+            return import_card(temp, home, progress, source_label=source.name)
+    except zipfile.BadZipFile as exc:
+        raise ValueError('ZIP 文件损坏或尚未上传完整') from exc

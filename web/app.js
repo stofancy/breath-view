@@ -380,8 +380,9 @@ function exportCSV(event) {
   $('#export').href='api/export?'+new URLSearchParams({start:range[0],end:range[1]});
 }
 
-function showImport(){if(!$('#importDialog').open)$('#importDialog').showModal();}
-window.chooseFolder=path=>{$('#sourcePath').value=path;showImport();};
+function showImport(){if(!$('#importDialog').open)$('#importDialog').showModal();api('status').then(s=>{$('#localSource').hidden=!s.local_paths;if(s.busy){$('#startImport').disabled=true;pollImport();}}).catch(e=>{$('#importProgress').textContent=e.message;});}
+window.chooseFolder=path=>{$('#sourcePath').value=path;$('#archiveFile').value='';showImport();};
+$('#archiveFile').onchange=()=>{$('#sourcePath').value='';};
 async function pollImport() {
   try {
     const status=await api('status');$('#importProgress').textContent=status.error||status.message;
@@ -427,8 +428,23 @@ for(const id of ['importNav','emptyImport','dataImport'])$('#'+id).onclick=showI
 $('#closeDialog').onclick=()=>$('#importDialog').close();
 $('#importForm').onsubmit=async event=>{
   event.preventDefault();
-  try{await api('import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:$('#sourcePath').value})});$('#startImport').disabled=true;pollImport();}
-  catch(error){$('#importProgress').textContent=error.message;}
+  $('#startImport').disabled=true;
+  try{
+    const file=$('#archiveFile').files[0];
+    if(file){
+      if(!/\.zip$/i.test(file.name)||file.size>8*1024**3)throw new Error('请选择不超过 8 GiB 的 ZIP 文件');
+      await new Promise((resolve,reject)=>{
+        const xhr=new XMLHttpRequest();xhr.open('POST','api/upload');xhr.setRequestHeader('Content-Type','application/zip');
+        xhr.upload.onprogress=e=>{$('#importProgress').textContent=e.lengthComputable?`正在上传 ${Math.round(e.loaded/e.total*100)}% · 上传后自动解析`:'正在上传';};
+        xhr.onload=()=>{let body;try{body=JSON.parse(xhr.responseText);}catch{reject(new Error('上传响应无效'));return;}xhr.status===200?resolve():reject(new Error(body.error||'上传失败'));};
+        xhr.onerror=()=>reject(new Error('连接中断，请检查网络后重新上传'));xhr.send(file);
+      });
+    }else{
+      if(!$('#sourcePath').value)throw new Error('请先选择 ZIP 文件，或使用桌面工具栏选择数据');
+      await api('import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:$('#sourcePath').value})});
+    }
+    pollImport();
+  }catch(error){$('#importProgress').textContent=error.message;$('#startImport').disabled=false;}
 };
 document.onkeydown=event=>{
   if(activeView!=='detail'||$('#importDialog').open||['INPUT','TEXTAREA','SELECT','BUTTON'].includes(event.target.tagName))return;

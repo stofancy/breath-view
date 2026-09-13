@@ -99,11 +99,11 @@
         <dt>数据缺口</dt><dd>循环覆盖、未保存或读取失败均可能导致波形缺失。按每个数据包时间归档，缺口断开显示；重复时间戳去重并报告，不插值填补。</dd>
         <dt>尚未解析</dt><dd>血氧、睡眠分期、鼾声、设备设置；不显示推测值。本版本不使用 .idx、.evt、.log 文件。</dd>
       </dl></article>
-      <article class="panel prose"><h2>存储与导出</h2><p>只读访问来源文件夹，摘要与编号波形复制到电脑。每次导入保留独立快照，当前界面显示最新快照；失败导入不替换已有数据。CSV 导出遵循当前页面的日期范围：每日详情导出当天，期间统计导出所选期间，数据管理导出全部摘要。未结算或缺失数值留空。</p></article>
+      <article class="panel prose"><h2>存储与导出</h2><p>只读访问来源文件夹，摘要与编号波形保存到当前服务。每次导入保留独立快照，当前界面显示最新快照；失败导入不替换已有数据。CSV 导出遵循当前页面的日期范围：每日详情导出当天，期间统计导出所选期间，数据管理导出全部摘要。未结算或缺失数值留空。</p></article>
     </section>
     <footer><span id="statusText">未导入数据</span><span>设备时钟 · 治疗日从 12:00 起</span></footer>
   </main>
-  <dialog id="importDialog"><form id="importForm"><div class="panel-heading"><h2>导入设备数据</h2><button type="button" id="closeDialog" class="outline" aria-label="关闭">关闭</button></div><p>选择 SD 卡根目录或备份文件夹。桌面窗口顶部提供文件夹选择器。来源数据不会被修改。</p><label for="sourcePath">数据文件夹</label><input id="sourcePath" required value="/run/media/ztmdsbt/5898-A683"><div id="importProgress" role="status"></div><div class="dialog-actions"><button type="submit" id="startImport" class="primary">开始导入</button></div></form></dialog>
+  <dialog id="importDialog"><form id="importForm"><div class="panel-heading"><h2>导入设备数据</h2><button type="button" id="closeDialog" class="outline" aria-label="关闭">关闭</button></div><p>将 SD 卡中的 .USR 和同名编号文件一起压缩为 ZIP，选择后上传。支持外层文件夹；每个压缩包只能包含一台设备的一份数据。</p><label for="archiveFile">选择 ZIP 压缩包（最大 8 GiB）</label><input type="file" id="archiveFile" accept=".zip,application/zip"><div id="localSource" hidden><label for="sourcePath">或使用桌面顶部选择文件夹 / .USR / ZIP</label><input id="sourcePath" readonly placeholder="通过桌面工具栏选择"></div><p class="small-note">更新请上传完整备份。最新快照替换当前视图，旧快照和已保存自述保留；只有 .USR 时不包含波形。上传期间请保持页面打开。</p><div id="importProgress" role="status"></div><div class="dialog-actions"><button type="submit" id="startImport" class="primary">开始导入</button></div></form></dialog>
   <dialog id="exportDialog" class="export-dialog"><div class="panel-heading"><h2>带去看医生</h2><button id="closeExport" class="outline">关闭</button></div><p id="exportPeriod"></p><p>包含本期变化、已保存的感受、复诊问题和数据来源。文件可离线查看，发到手机后即可随身携带。</p><div class="export-options"><a id="mobilePdf" class="primary" download>下载手机 PDF</a><a id="mobileHtml" class="outline" download>下载离线网页</a></div><p id="exportStatus" role="status"></p><p class="small-note">PDF 为手机窄版。离线网页支持展开详情；在手机浏览器中打开。两种文件都包含你的健康记录。</p></dialog>
   <div id="termTooltip" class="term-tooltip" role="tooltip" hidden></div>
   <div id="tooltip" class="tooltip" hidden></div>

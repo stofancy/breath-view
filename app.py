@@ -3,10 +3,10 @@
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-import argparse, csv, io, json, secrets, threading, sys, os, logging, time, subprocess
+import argparse, csv, io, json, secrets, threading, sys, os, logging, time, subprocess, tempfile
 from logging.handlers import RotatingFileHandler
 from datetime import date
-from storage import load, import_card, DEFAULT_HOME
+from storage import load, import_source, DEFAULT_HOME, MAX_ARCHIVE_BYTES
 from analysis_report import build_report, report_markdown, report_html, validate_context, period
 from portable_report import mobile_html, mobile_pdf
 
@@ -58,9 +58,9 @@ class Application:
                 json.dump(values,stream,ensure_ascii=False,allow_nan=False)
             os.replace(temp,self.home/'patient-contexts.json')
             logging.info('context saved start=%s end=%s',start,end)
-    def start_import(self,path):
+    def start_import(self,path, cleanup=False, reserved=False):
         with self.lock:
-            if self.status['busy']:raise ValueError('正在导入，请稍候')
+            if self.status['busy'] and not reserved:raise ValueError('正在导入，请稍候')
             self.status={'busy':True,'message':'准备导入','error':None}
         logging.info('import requested source=%s',Path(path).expanduser())
         def worker():
@@ -68,18 +68,29 @@ class Application:
                 def progress(text):
                     self.status['message']=text
                     logging.info('import progress %s',text)
-                data=import_card(path,self.home,progress)
+                data=import_source(path,self.home,progress)
                 with self.lock:self.data=data
                 self.status={'busy':False,'message':'导入完成','error':None}
                 logging.info('import finished source=%s',data.catalog.get('source'))
             except Exception as e:
                 self.status={'busy':False,'message':'导入失败','error':str(e)}
                 logging.exception('import failed')
+            finally:
+                if cleanup:Path(path).unlink(missing_ok=True)
         threading.Thread(target=worker,daemon=True).start()
 
 
-def serve(app,port=0):
-    token=secrets.token_urlsafe(24)
+def serve(app,port=0,host='127.0.0.1'):
+    remote=host not in ('127.0.0.1','localhost')
+    if remote:
+        token_path=app.home/'access-token'
+        if not token_path.exists():
+            with token_path.open('x') as stream:
+                os.chmod(token_path,0o600)
+                stream.write(secrets.token_urlsafe(32))
+        token=token_path.read_text().strip()
+        if len(token)<32 or not all(c.isalnum() or c in '-_' for c in token):raise ValueError('访问令牌格式无效')
+    else:token=secrets.token_urlsafe(24)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def respond(self,value,status=200,kind='application/json; charset=utf-8',filename=None):
@@ -91,12 +102,13 @@ def serve(app,port=0):
             if filename:
                 self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
             self.send_header('Cache-Control','no-store')
+            self.send_header('Referrer-Policy','no-referrer')
             self.send_header('X-Content-Type-Options','nosniff')
             self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(raw)
             if started is not None:
-                logging.info('http %s %s status=%s bytes=%s duration_ms=%.1f',self.command,urlparse(self.path).path,status,len(raw),(time.monotonic()-started)*1000)
+                logging.info('http %s %s status=%s bytes=%s duration_ms=%.1f',self.command,urlparse(self.path).path.replace(token,'[access]'),status,len(raw),(time.monotonic()-started)*1000)
         def route(self):
             url=urlparse(self.path)
             prefix='/'+token+'/'
@@ -107,7 +119,7 @@ def serve(app,port=0):
             route,q=self.route()
             if route is None:return self.respond({'error':'Not found'},404)
             try:
-                if route=='api/status':return self.respond(app.status)
+                if route=='api/status':return self.respond({**app.status,'local_paths':not remote})
                 # Build a consistent snapshot under the data lock, then release it
                 # before starting PDF rendering so navigation stays responsive.
                 if route in ('api/mobile.html','api/mobile.pdf'):
@@ -155,11 +167,39 @@ def serve(app,port=0):
         def do_POST(self):
             self._request_started=time.monotonic()
             route,q=self.route()
-            # Random capability URL + no CORS + same-origin JSON requests.
-            if route not in ('api/import','api/context'):return self.respond({'error':'Not found'},404)
-            if self.headers.get('Content-Type')!='application/json':return self.respond({'error':'JSON required'},415)
+            if route not in ('api/import','api/context','api/upload'):return self.respond({'error':'Not found'},404)
             origin=self.headers.get('Origin')
-            if origin and origin!=f'http://127.0.0.1:{self.server.server_port}':return self.respond({'error':'Forbidden'},403)
+            if origin and origin not in ('http://'+self.headers.get('Host',''), 'https://'+self.headers.get('Host','')):
+                return self.respond({'error':'Forbidden'},403)
+            if route=='api/upload':
+                upload=None
+                with app.lock:
+                    if app.status['busy']:return self.respond({'error':'正在导入，请稍候'},409)
+                    app.status={'busy':True,'message':'正在接收 ZIP','error':None}
+                try:
+                    if self.headers.get('Content-Type') not in ('application/zip','application/octet-stream'):raise ValueError('请上传 ZIP 文件')
+                    n=int(self.headers.get('Content-Length','0'))
+                    if not 0<n<=MAX_ARCHIVE_BYTES:raise ValueError('ZIP 文件大小须在 1 字节至 8 GiB 之间')
+                    self.connection.settimeout(120)
+                    with tempfile.NamedTemporaryFile(prefix='.upload-',suffix='.zip',dir=app.home,delete=False) as stream:
+                        upload=Path(stream.name)
+                        remaining=n
+                        while remaining:
+                            chunk=self.rfile.read(min(1024*1024,remaining))
+                            if not chunk:raise ValueError('上传中断，请重新上传')
+                            stream.write(chunk);remaining-=len(chunk)
+                            app.status['message']=f'正在接收 ZIP · {(n-remaining)*100//n}%'
+                    app.start_import(upload,cleanup=True,reserved=True)
+                    upload=None
+                    return self.respond({'started':True})
+                except (ValueError,OSError) as e:
+                    app.status={'busy':False,'message':'上传失败','error':str(e)}
+                    logging.exception('upload failed')
+                    return self.respond({'error':str(e)},400)
+                finally:
+                    if upload:upload.unlink(missing_ok=True)
+            if route=='api/import' and remote:return self.respond({'error':'请通过 ZIP 上传本机数据'},403)
+            if self.headers.get('Content-Type')!='application/json':return self.respond({'error':'JSON required'},415)
             try:
                 n=int(self.headers.get('Content-Length','0'))
                 if not 0<n<8192:raise ValueError('请求长度无效')
@@ -173,7 +213,7 @@ def serve(app,port=0):
             except (ValueError,KeyError,TypeError,OSError) as e:
                 logging.exception('POST failed route=%s',route)
                 self.respond({'error':str(e)},400)
-    server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
+    server=ThreadingHTTPServer((host,port),Handler)
     server.daemon_threads=True
     threading.Thread(target=server.serve_forever,daemon=True).start()
     url=f'http://127.0.0.1:{server.server_port}/{token}/'
@@ -187,16 +227,20 @@ def main():
     parser.add_argument('--import-card',type=Path)
     parser.add_argument('--serve',action='store_true',help='只启动本地浏览器服务')
     parser.add_argument('--port',type=int,default=0)
+    parser.add_argument('--host',default='127.0.0.1',help='服务监听地址，NAS 使用 0.0.0.0')
+    parser.add_argument('source',nargs='?',type=Path,help='打开文件夹、.USR 或 ZIP')
     args=parser.parse_args()
     if args.import_card:
         configure_logging(args.home)
-        data=import_card(args.import_card,args.home,lambda s:print(s,flush=True))
+        data=import_source(args.import_card,args.home,lambda s:print(s,flush=True))
         print(json.dumps({'days':len(data.days),'wave_days':len(data.catalog['spans']),'invalid':data.catalog['invalid_packets']},ensure_ascii=False))
         return
     log_path=configure_logging(args.home)
     logging.info('mode=%s log=%s', 'serve' if args.serve else 'gui',log_path)
     app=Application(args.home)
-    server,url=serve(app,args.port)
+    if not args.serve and args.host!='127.0.0.1':parser.error('桌面模式仅支持本机监听')
+    server,url=serve(app,args.port,args.host)
+    if args.source:app.start_import(args.source)
     if args.serve:
         print(url,flush=True)
         try:threading.Event().wait()
@@ -250,6 +294,11 @@ def main():
         logging.info('native folder dialog closed selected=%s',bool(path))
         if path:view.page().runJavaScript('window.chooseFolder('+json.dumps(path)+')')
     choose.triggered.connect(select);toolbar.addAction(choose)
+    open_file=QAction('打开 .USR / ZIP',win)
+    def select_file():
+        path,_=QFileDialog.getOpenFileName(win,'打开呼吸机数据',str(Path.home()),'呼吸机数据 (*.USR *.usr *.zip *.ZIP)')
+        if path:view.page().runJavaScript('window.chooseFolder('+json.dumps(path)+')')
+    open_file.triggered.connect(select_file);toolbar.addAction(open_file)
     refresh=QAction('刷新视图',win)
     refresh.triggered.connect(lambda:(logging.info('manual refresh requested'),view.reload()))
     toolbar.addAction(refresh)
