@@ -10,3 +10,5 @@
 - ZIP 最大 8 GiB，代理关闭请求缓冲，避免先把整个包写到 LightSail 磁盘。
 
 回滚：移走此单独 Nginx 配置，`nginx -t && systemctl reload nginx`；NAS 执行 `docker exec new-api-tailscale tailscale serve --tcp=8765 off`；删除此子域名的 DNS 记录即可。不要 reset Tailscale Serve，否则会影响原有 New API HTTPS 配置。软件与 NAS 本地数据不需要回滚。
+
+GitHub OAuth 应用 `New API Console`（3825816）必须登记两个精确 Redirect URI：`https://console.ztmdsbt.site/oauth2/callback` 和 `https://sleep.ztmdsbt.site/oauth2/callback`，均不启用通配匹配。仅测试未登录的 GitHub /login 页面不能验证回调匹配；必须完成实际登录并返回息览。
