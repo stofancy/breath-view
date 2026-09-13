@@ -3,7 +3,8 @@
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-import argparse, csv, io, json, secrets, threading, sys, webbrowser
+import argparse, csv, io, json, secrets, threading, sys
+from datetime import date
 from storage import load, import_card, DEFAULT_HOME
 
 ROOT=Path(__file__).resolve().parent
@@ -33,11 +34,13 @@ def serve(app,port=0):
     token=secrets.token_urlsafe(24)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
-        def respond(self,value,status=200,kind='application/json; charset=utf-8'):
+        def respond(self,value,status=200,kind='application/json; charset=utf-8',filename=None):
             raw=json.dumps(value,ensure_ascii=False,allow_nan=False).encode() if kind.startswith('application/json') else value
             self.send_response(status)
             self.send_header('Content-Type',kind)
             self.send_header('Content-Length',str(len(raw)))
+            if filename:
+                self.send_header('Content-Disposition',f'attachment; filename="{filename}"')
             self.send_header('Cache-Control','no-store')
             self.send_header('X-Content-Type-Options','nosniff')
             self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'")
@@ -59,11 +62,16 @@ def serve(app,port=0):
                         if route=='api/overview':return self.respond(app.data.overview())
                         if route=='api/day':return self.respond(app.data.detail(q.get('date',[''])[0],q.get('start',[None])[0],q.get('end',[None])[0]))
                         if route=='api/export':
+                            days=app.data.overview()['days']
+                            start=date.fromisoformat(q.get('start',[days[0]['date']])[0]).isoformat()
+                            end=date.fromisoformat(q.get('end',[days[-1]['date']])[0]).isoformat()
+                            if start>end:raise ValueError('开始日期晚于结束日期')
                             s=io.StringIO();w=csv.writer(s)
-                            w.writerow(['治疗日（中午起）','使用分钟（历史摘要）','OSA记录数','CSA记录数','HYP记录数','记录事件指数（每小时，估算）','保留波形','未结算'])
-                            for d in app.data.overview()['days']:
-                                w.writerow([d['date'],d['minutes'],*[d['counts'][k] for k in ('OSA','CSA','HYP')],d['index'],d['wave'],d['current']])
-                            return self.respond(('\ufeff'+s.getvalue()).encode(),kind='text/csv; charset=utf-8')
+                            w.writerow(['治疗日（中午起）','设备使用分钟（历史摘要）','OSA记录条目','CSA记录条目','HYP记录条目','事件记录频率（条目每小时，估算）','保留波形','摘要状态'])
+                            for d in days:
+                                if start<=d['date']<=end:
+                                    w.writerow([d['date'],d['minutes'],*[d['counts'][k] for k in ('OSA','CSA','HYP')],d['index'],'有' if d['wave'] else '无','未结算' if d['current'] else '已结算'])
+                            return self.respond(('\ufeff'+s.getvalue()).encode(),kind='text/csv; charset=utf-8',filename=f'breath-summary-{start}-{end}.csv')
                     return self.respond({'error':'Not found'},404)
                 assets={'':('index.html','text/html; charset=utf-8'),'app.js':('app.js','text/javascript; charset=utf-8'),'style.css':('style.css','text/css; charset=utf-8'),'icon.svg':('icon.svg','image/svg+xml')}
                 if route not in assets:return self.respond({'error':'Not found'},404)
@@ -132,8 +140,8 @@ def main():
         path=QFileDialog.getExistingDirectory(win,'选择含有 .USR 文件的 SD 卡根目录','/run/media')
         if path:view.page().runJavaScript('window.chooseFolder('+json.dumps(path)+')')
     choose.triggered.connect(select);toolbar.addAction(choose)
-    refresh=QAction('重新载入界面',win);refresh.triggered.connect(view.reload);toolbar.addAction(refresh)
-    toolbar.setStyleSheet('QToolBar { background:#edf2ef; padding:7px; border:0; } QToolButton { padding:7px 14px; color:#214b41; }')
+    refresh=QAction('刷新视图',win);refresh.triggered.connect(view.reload);toolbar.addAction(refresh)
+    toolbar.setStyleSheet('QToolBar { background:#e7ebee; padding:3px; border:0; } QToolButton { padding:5px 10px; color:#334b5c; }')
     view.setUrl(QUrl(url));win.show()
     qt.aboutToQuit.connect(server.shutdown)
     sys.exit(qt.exec())
