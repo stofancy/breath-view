@@ -1,4 +1,24 @@
 'use strict';
+// Standalone QtWebEngine troubleshooting trace. It records control and
+// lifecycle events without recording patient-entered values or note text.
+const uiTarget = target => {
+  const node=target?.closest?.('[id],[name],button,input,textarea,select')||target;
+  return node?.id||node?.getAttribute?.('name')||node?.tagName||'unknown';
+};
+const uiLog = (event, target) => {
+  const suffix=target?` target=${uiTarget(target)}`:'';
+  console.info(`[ui] ${event}${suffix}`);
+};
+document.addEventListener('DOMContentLoaded',()=>uiLog('dom-ready'));
+document.addEventListener('pointerdown',event=>uiLog('pointerdown',event.target),true);
+document.addEventListener('pointerup',event=>uiLog('pointerup',event.target),true);
+document.addEventListener('focusin',event=>uiLog('focusin',event.target),true);
+document.addEventListener('change',event=>uiLog('change',event.target),true);
+document.addEventListener('input',event=>uiLog('input',event.target),true);
+document.addEventListener('submit',event=>uiLog('submit',event.target),true);
+window.addEventListener('error',event=>console.error(`[ui] error message=${event.message||'unknown'} source=${event.filename||'unknown'} line=${event.lineno||0}`));
+window.addEventListener('unhandledrejection',event=>console.error(`[ui] unhandledrejection reason=${String(event.reason||'unknown')}`));
+setInterval(()=>uiLog(`heartbeat view=${activeView||'starting'}`),5000);
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const channels = {
@@ -35,12 +55,21 @@ function showError(message='') {
   $('#error').textContent = message;
 }
 async function api(path, options) {
-  const response = await fetch('api/'+path, options);
-  const data = await response.json();
-  if (!response.ok || data.error) throw Error(data.error || '读取失败');
-  return data;
+  const label=String(path).split('?')[0],started=performance.now();
+  uiLog(`api-start ${label}`);
+  try {
+    const response = await fetch('api/'+path, options);
+    const data = await response.json();
+    uiLog(`api-end ${label} status=${response.status} duration_ms=${Math.round(performance.now()-started)}`);
+    if (!response.ok || data.error) throw Error(data.error || '读取失败');
+    return data;
+  } catch(error) {
+    uiLog(`api-error ${label} duration_ms=${Math.round(performance.now()-started)}`);
+    throw error;
+  }
 }
 function switchView(view) {
+  uiLog(`view ${view}`);
   activeView = view;
   $$('.view').forEach(section => section.hidden = section.id !== view || !overview);
   $$('.nav').forEach(button => {

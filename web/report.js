@@ -1,5 +1,10 @@
 'use strict';
 let reportData=null, reportRequest=0;
+const contextValue=name=>document.querySelector(`input[name="${name}"]:checked`)?.value||'unknown';
+function setContextValue(name,value){
+  const input=document.querySelector(`input[name="${name}"][value="${CSS.escape(value||'unknown')}"]`)||document.querySelector(`input[name="${name}"][value="unknown"]`);
+  if(input)input.checked=true;
+}
 async function loadReport(force=false) {
   if(!overview||!dateRange)return;
   $('#reportStart').value=dateRange[0];$('#reportEnd').value=dateRange[1];
@@ -7,7 +12,10 @@ async function loadReport(force=false) {
   if(!force&&reportData&&reportData.current.start===dateRange[0]&&reportData.current.end===dateRange[1]&&reportData.imported_at===overview.imported_at)return;
   const seq=++reportRequest,params=new URLSearchParams({start:dateRange[0],end:dateRange[1]});
   $('#reportStatus').textContent='正在计算期间汇总与重点日期波形…';
-  $('#reportContent').classList.add('loading');$('#contextForm').classList.add('loading');
+  // Keep self-report controls usable while derived results are recalculated.
+  // The form uses radio choices instead of native select popups because some
+  // QtWebEngine/Wayland windows can stop responding when those popups open.
+  $('#reportContent').classList.add('loading');
   $('#reportDownload').setAttribute('aria-disabled','true');
   try {
     const data=await api('report?'+params);
@@ -17,7 +25,7 @@ async function loadReport(force=false) {
     $('#reportDownload').href='api/report.html?'+params;
     $('#reportDownload').setAttribute('aria-disabled','false');
   }catch(error){if(seq===reportRequest){$('#reportStatus').textContent='生成失败：'+error.message;$('#reportContent').hidden=true;}}
-  finally{if(seq===reportRequest){$('#reportContent').classList.remove('loading');$('#contextForm').classList.remove('loading');}}
+  finally{if(seq===reportRequest)$('#reportContent').classList.remove('loading');}
 }
 function renderReport() {
   const r=reportData,p=r.current,prev=r.previous;
@@ -42,7 +50,7 @@ function renderReport() {
   $('#comparisonRule').textContent=r.comparison.rule;
   $('#reportSources').innerHTML=r.sources.map(source=>`<li><a href="${source.url}" rel="noreferrer">${escape(source.title)}</a></li>`).join('');
   $('#sleepHours').value=r.context.sleep_hours??'';
-  $('#sleepiness').value=r.context.sleepiness;$('#maskProblem').value=r.context.mask_problem;$('#maskOff').value=r.context.mask_off;
+  setContextValue('sleepiness',r.context.sleepiness);setContextValue('maskProblem',r.context.mask_problem);setContextValue('maskOff',r.context.mask_off);
   $('#patientNote').value=r.context.note;$('#contextStatus').textContent=`自述适用期间：${p.start} — ${p.end}`;
 }
 $('#generateReport').onclick=()=>{
@@ -55,7 +63,7 @@ $$('#reportPeriod button').forEach(button=>button.onclick=()=>{presetRange(Numbe
 $('#contextForm').onsubmit=async event=>{
   event.preventDefault();if(!reportData)return;
   const r=reportData.current;
-  const context={sleep_hours:$('#sleepHours').value||null,sleepiness:$('#sleepiness').value,mask_problem:$('#maskProblem').value,mask_off:$('#maskOff').value,note:$('#patientNote').value};
+  const context={sleep_hours:$('#sleepHours').value||null,sleepiness:contextValue('sleepiness'),mask_problem:contextValue('maskProblem'),mask_off:contextValue('maskOff'),note:$('#patientNote').value};
   $('#saveContext').disabled=true;
   try{await api('context',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start:r.start,end:r.end,context})});await loadReport(true);$('#contextStatus').textContent='已保存到本机并更新本期间分析。';}
   catch(error){$('#contextStatus').textContent='保存失败：'+error.message;}

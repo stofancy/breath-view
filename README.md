@@ -15,11 +15,21 @@
 
 ## 启动
 
-应用菜单搜索 **息览**，或运行：
+独立 GUI 安装在当前用户的本地工作区：
+
+- 程序目录：[breath-view](/home/ztmdsbt/workspaces/breath-view)
+- 桌面入口：[息览.desktop](/home/ztmdsbt/桌面/息览.desktop)
+- 应用菜单入口：搜索 **息览**
+
+下次直接双击桌面的 **息览.desktop**，或在应用菜单搜索 **息览 · 呼吸机数据**。不要保存浏览器地址栏里的随机本地网址；独立 GUI 每次启动都会重新生成本地地址。
+
+也可以在终端运行：
 
 ```sh
 ./launch.sh
 ```
+
+自述区域的“是 / 否 / 未填写”使用键盘可操作的选项按钮，不调用系统下拉弹窗；这样在 Linux Wayland 下运行独立 GUI 时不会因 QtWebEngine 原生下拉框卡住。
 
 当前电脑已有 Python 3、PySide6 与 NumPy。迁移到其他电脑时可在 Python 虚拟环境中安装 `requirements.txt`，再用该环境的 Python 执行 `app.py`。
 
