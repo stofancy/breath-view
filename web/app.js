@@ -21,16 +21,24 @@ window.addEventListener('unhandledrejection',event=>console.error(`[ui] unhandle
 setInterval(()=>uiLog(`heartbeat view=${activeView||'starting'}`),5000);
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
+const i18n = window.breathI18n;
+const localizedPath = path => i18n.localizedApiPath(path);
 const channels = {
-  flow: {name:'流量（原始通道）',unit:'L/min',color:'#326c92',height:150},
-  ipap: {name:'吸气压力 · IPAP',unit:'cmH₂O',color:'#417763',height:100,help:'吸气阶段的压力通道，用来帮助气流进入。按 OSCAR 的 BMC 旧格式解释；不是医生设定值，也不是压力越高睡得越好。'},
-  epap: {name:'呼气压力 · EPAP',unit:'cmH₂O',color:'#6b819b',height:100,help:'呼气阶段维持气道开放的压力通道。此前单一“设备压力”显示的是这一通道。与吸气压力一起参考；本机通道含义仍待原厂软件核验。'},
-  leak: {name:'设备漏气通道',unit:'L/min',color:'#a2793e',height:100},
-  tidal: {name:'潮气量',unit:'mL',color:'#607f9a',height:95},
-  ventilation: {name:'分钟通气量',unit:'L/min',color:'#6b8152',height:95},
-  rate: {name:'呼吸频率',unit:'次/min',color:'#84709a',height:95}
+  flow: {name:'channel.flow',unit:'L/min',color:'#326c92',height:150},
+  ipap: {name:'channel.ipap',unit:'cmH₂O',color:'#417763',height:100,help:'channel.ipapHelp'},
+  epap: {name:'channel.epap',unit:'cmH₂O',color:'#6b819b',height:100,help:'channel.epapHelp'},
+  leak: {name:'channel.leak',unit:'L/min',color:'#a2793e',height:100},
+  tidal: {name:'channel.tidal',unit:'mL',color:'#607f9a',height:95},
+  ventilation: {name:'channel.ventilation',unit:'L/min',color:'#6b8152',height:95},
+  rate: {name:'channel.rate',unit:'channel.rateUnit',color:'#84709a',height:95}
 };
-const eventNames = {OSA:'阻塞性暂停',CSA:'中枢性暂停',HYP:'低通气'};
+const eventNames = {OSA:'event.OSA',CSA:'event.CSA',HYP:'event.HYP'};
+const channelName = channel => t(channel.name);
+const channelUnit = channel => t(channel.unit);
+const eventName = kind => t(eventNames[kind] || kind);
+function channelHelp(key,channel) {
+  return channel.help?`<button class="term-help" data-term="${key}" data-title="${escape(channelName(channel))}" data-explanation="${escape(t(channel.help))}" aria-label="${escape(t('channel.helpAria',{name:channelName(channel)}))}">?</button>`:'';
+}
 let overview = null, activeView = 'report', detail = null, dayKey = null;
 let dateRange = null, windowRange = null, fullRange = null, requestId = 0;
 let rowLimit = 40, eventFilter = 'all', selectedEvent = null, cursor = null;
@@ -41,12 +49,12 @@ const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<'
 const duration = minutes => {
   if (minutes == null) return '—';
   const total = Math.round(minutes);
-  return `${Math.floor(total/60)} 小时 ${total%60} 分`;
+  return t('duration',{hours:Math.floor(total/60),minutes:total%60});
 };
 const clock = (seconds, precise=false) => {
   const s = Math.max(0, Math.round(seconds));
   const h = Math.floor(s/3600)+12;
-  return `${h>=24?'次日 ':''}${String(h%24).padStart(2,'0')}:${String(Math.floor(s%3600/60)).padStart(2,'0')}${precise?':'+String(s%60).padStart(2,'0'):''}`;
+  return `${h>=24?t('clock.nextDay'):''}${String(h%24).padStart(2,'0')}:${String(Math.floor(s%3600/60)).padStart(2,'0')}${precise?':'+String(s%60).padStart(2,'0'):''}`;
 };
 function card(label, value, note) {
   return `<div class="metric"><div class="metric-label">${label}</div><div class="metric-value">${value}</div><div class="metric-note">${note}</div></div>`;
@@ -59,10 +67,10 @@ async function api(path, options) {
   const label=String(path).split('?')[0],started=performance.now();
   uiLog(`api-start ${label}`);
   try {
-    const response = await fetch('api/'+path, options);
+    const response = await fetch('api/'+localizedPath(path), options);
     const data = await response.json();
     uiLog(`api-end ${label} status=${response.status} duration_ms=${Math.round(performance.now()-started)}`);
-    if (!response.ok || data.error) throw Error(data.error || '读取失败');
+    if (!response.ok || data.error) throw Error(data.error || t('error.readFailed'));
     return data;
   } catch(error) {
     uiLog(`api-error ${label} duration_ms=${Math.round(performance.now()-started)}`);
@@ -77,9 +85,9 @@ function switchView(view) {
     button.classList.toggle('active', button.dataset.view === view);
     button.setAttribute('aria-current', button.dataset.view === view ? 'page' : 'false');
   });
-  $('#title').textContent = {report:'我的睡眠',detail:'每日详情',overview:'期间统计',data:'数据管理'}[view];
+  $('#title').textContent = t('header.'+view);
   $('#export').hidden = view === 'report';
-  $('#export').textContent = {report:'导出分析期间摘要',detail:'导出当天摘要',overview:'导出期间摘要',data:'导出全部摘要'}[view];
+  $('#export').textContent = t('export.'+view);
   showError();
   if (overview && view === 'overview') renderOverview();
   if (overview && view === 'report') loadReport();
@@ -100,8 +108,8 @@ async function refresh() {
     }
     $('#device').textContent = overview.device.model;
     $('#dateCoverage').textContent = `${overview.days[0].date} — ${overview.days.at(-1).date}`;
-    $('#importStamp').textContent = '导入时间 '+overview.imported_at.replace('T',' ');
-    $('#statusText').textContent = `${overview.device.model} · ${overview.days.length} 个治疗日 · 本地副本`;
+    $('#importStamp').textContent = t('status.importTime',{value:overview.imported_at.replace('T',' ')});
+    $('#statusText').textContent = t('status.device',{model:overview.device.model,days:overview.days.length});
     for (const id of ['date','rangeStart','rangeEnd']) {
       $('#'+id).min = overview.days[0].date;
       $('#'+id).max = overview.days.at(-1).date;
@@ -111,7 +119,7 @@ async function refresh() {
     const bad = overview.files.filter(file => file.unreadable_ranges?.length);
     $('#notice').hidden = !bad.length;
     const bytes = bad.reduce((sum,file) => sum+file.unreadable_ranges.reduce((s,r) => s+r[1],0),0);
-    $('#notice').textContent = '部分波形未能读取，相关时段无法回看；已读取的摘要仍可查看。详情见“数据管理”。';
+    $('#notice').textContent = t('notice.partialWave');
     switchView(activeView);
   } catch (error) { showError(error.message); }
 }
@@ -146,11 +154,11 @@ function renderOverview() {
   const missing = days.filter(day => day.missing).length;
   const current = days.filter(day => day.current).length;
   $('#metrics').innerHTML =
-    card('平均使用时长', settled.length ? duration(total/settled.length) : '—',`分母：${settled.length} 个已结算记录日`) +
-    card('累计设备使用', fmt(total/60,1)+'<small>小时</small>','读取设备历史摘要') +
-    card('事件记录频率', total ? fmt(events/(total/60),2)+'<small>条目 /h</small>' : '—',`${events} 条记录 ÷ 使用小时数 · 估算`) +
-    card('已结算记录',`${settled.length}<small>/ ${days.length} 天</small>`,`${missing} 天无摘要 · ${current} 天未结算`);
-  $('#coverage').textContent = `统计期间 ${dateRange[0]} 至 ${dateRange[1]}。${days.filter(day => day.wave).length} 天有保留波形；缺失日期不作零使用处理，未结算日不参与时长和事件频率平均。`;
+    card(t('metric.averageUse'), settled.length ? duration(total/settled.length) : '—',t('metric.settledDenominator',{count:settled.length})) +
+    card(t('metric.totalUse'), fmt(total/60,1)+`<small>${t('metric.hours')}</small>`,t('metric.summaryRead')) +
+    card(t('metric.eventRate'), total ? fmt(events/(total/60),2)+`<small>${t('metric.entriesPerHour')}</small>` : '—',t('metric.estimate',{events})) +
+    card(t('metric.settled'),t('metric.days',{settled:settled.length,total:days.length}),t('metric.dayState',{missing,current}));
+  $('#coverage').textContent = t('coverage.period',{start:dateRange[0],end:dateRange[1],waveDays:days.filter(day => day.wave).length});
   $('#rangeText').textContent = `${dateRange[0]} — ${dateRange[1]}`;
   renderRows(); redraw();
 }
@@ -158,10 +166,10 @@ function renderRows() {
   const query = $('#search').value.trim();
   const days = selectedDays().filter(day => day.date.includes(query) && (!$('#onlyWave').checked || day.wave)).reverse();
   $('#rows').innerHTML = days.slice(0,rowLimit).map(day => {
-    const state = day.missing ? '无摘要' : day.wave ? '有保留波形' : '无保留波形';
-    return `<tr ${day.missing?'':`data-date="${day.date}" tabindex="0"`}><td>${day.date}</td><td>${day.current?'未结算':duration(day.minutes)}</td><td>${fmt(day.index,2)}</td>${['OSA','CSA','HYP'].map(kind => `<td>${day.counts[kind]??'—'}</td>`).join('')}<td><span class="badge ${day.wave?'wave':''}">${state}</span></td><td>${day.missing?'':'查看'}</td></tr>`;
+    const state = day.missing ? t('status.noSummary') : day.wave ? t('status.waveAvailable') : t('status.waveMissing');
+    return `<tr ${day.missing?'':`data-date="${day.date}" tabindex="0"`}><td>${day.date}</td><td>${day.current?t('status.pending'):duration(day.minutes)}</td><td>${fmt(day.index,2)}</td>${['OSA','CSA','HYP'].map(kind => `<td>${day.counts[kind]??'—'}</td>`).join('')}<td><span class="badge ${day.wave?'wave':''}">${state}</span></td><td>${day.missing?'':t('status.view')}</td></tr>`;
   }).join('');
-  $('#rowCount').textContent = `显示 ${Math.min(rowLimit,days.length)} / ${days.length} 天`;
+  $('#rowCount').textContent = t('status.showCount',{shown:Math.min(rowLimit,days.length),total:days.length});
   $('#more').hidden = rowLimit >= days.length;
   $$('#rows tr[data-date]').forEach(row => {
     row.onclick = () => openDay(row.dataset.date);
@@ -207,7 +215,10 @@ function plotOverview(canvas,days,metric) {
   const at=event=>Math.max(0,Math.min(days.length-1,Math.floor((event.offsetX-left)/bar)));
   canvas.onmousemove=event=>{
     const i=at(event),day=days[i];
-    tip(event,`${day.date}\n${metric==='minutes'?'使用时长':'事件记录频率'}：${values[i]==null?(day.current?'未结算':'无摘要'):fmt(values[i],2)+(metric==='minutes'?' 小时':' 条目 /h')}\n${day.wave?'有保留波形':day.missing?'没有摘要记录':'无保留波形'}`);
+    const metricLabel = metric === 'minutes' ? t('plot.usageValue') : t('plot.rateValue');
+    const value = values[i]==null ? (day.current ? t('status.pending') : t('status.noSummary')) : fmt(values[i],2)+(metric==='minutes'?' '+t('metric.hours'):' '+t('metric.entriesPerHour'));
+    const status = day.wave ? t('status.waveAvailable') : day.missing ? t('status.noSummary') : t('status.waveMissing');
+    tip(event,t('plot.waveStatus',{date:day.date,metric:metricLabel,value,status}));
   };
   canvas.onmouseleave=hideTip;
   canvas.onclick=event=>{const day=days[at(event)];if(!day.missing)openDay(day.date);};
@@ -217,8 +228,8 @@ async function openDay(date) {
   dayKey=date;$('#date').value=date;detail=null;selectedEvent=null;cursor=null;plots=[];
   windowRange=null;eventFilter='all';$('#charts').replaceChildren();$('#dayMetrics').replaceChildren();
   $('#eventList').replaceChildren();$('#stats').replaceChildren();$('#segments').replaceChildren();$('#timeline').replaceChildren();
-  $('#waveNotice').textContent='正在读取 '+date+' 的记录…';
-  $('#dayState').textContent='读取中';
+  $('#waveNotice').textContent=t('status.loadingDay',{date});
+  $('#dayState').textContent=t('error.reading');
   $('#noWave').hidden=true;
   $('.time-nav').hidden=true;
   $('.event-timeline').hidden=true;
@@ -236,37 +247,37 @@ async function loadDay(reset=false, requested=windowRange) {
     if(reset)fullRange=[...windowRange];
     cursor=null;renderDetail();
   } catch(error) {
-    if(id===requestId){showError('无法读取 '+date+'：'+error.message);if(!detail){$('#dayState').textContent='读取失败';$('#waveNotice').textContent='读取失败，没有显示该日期的数据。';}}
+    if(id===requestId){showError(t('status.unreadable',{date,error:error.message}));if(!detail){$('#dayState').textContent=t('error.readFailedState');$('#waveNotice').textContent=t('error.noWave');}}
   } finally {if(id===requestId)$('#detailBody').classList.remove('loading');}
 }
 function renderDetail() {
   const day=detail,total=day.events.length,frequency=day.minutes&&!day.current?total/(day.minutes/60):null;
   const counts=Object.fromEntries(['OSA','CSA','HYP'].map(kind=>[kind,day.events.filter(event=>event.kind===kind).length]));
-  $('#dayState').textContent=day.current?'当前日 · 未结算':'历史摘要';
+  $('#dayState').textContent=day.current?t('detail.currentState'):t('detail.historyState');
   $('#dayMetrics').innerHTML=
-    card('设备使用时长',day.current?'未结算':duration(day.minutes),'历史摘要；非睡眠时长')+
-    card('事件记录频率',fmt(frequency,2)+(frequency==null?'':'<small>条目 /h</small>'),`${total} 条记录 ÷ 设备使用小时 · 估算`)+
-    card('保留波形时长',duration(day.wave_seconds/60),`${day.segments.length} 个记录段 · 按波形包估算`)+
-    card('呼吸事件条目',`${counts.OSA}<small>OSA</small>${counts.CSA}<small>CSA</small>${counts.HYP}<small>HYP</small>`,'记录时间精确到分钟');
+    card(t('metric.totalUse'),day.current?t('status.pending'):duration(day.minutes),t('detail.deviceUseNote'))+
+    card(t('metric.eventRate'),fmt(frequency,2)+(frequency==null?'':`<small>${t('metric.entriesPerHour')}</small>`),t('detail.eventRateDivision',{events:total}))+
+    card(t('detail.wave'),duration(day.wave_seconds/60),t('detail.waveDuration',{segments:day.segments.length}))+
+    card(t('detail.events'),`${counts.OSA}<small>OSA</small>${counts.CSA}<small>CSA</small>${counts.HYP}<small>HYP</small>`,t('detail.eventEntries'));
   const coverage=day.minutes?day.wave_seconds/(day.minutes*60):null;
   $('#waveNotice').textContent=day.wave_seconds?
-    `保留波形约 ${day.wave_seconds.toLocaleString()} 秒（每包按 1 秒计）${coverage!=null?'，约为摘要使用时长的 '+Math.round(coverage*100)+'%':''}。${day.duplicates?'保留 '+day.duplicates+' 个同秒时间戳的波形包。':''}统计仅覆盖现有数据。`:
-    '无保留波形：可能已被覆盖、未保存或无法读取。可查阅设备摘要及事件列表。';
+    t('detail.waveCoverage',{seconds:day.wave_seconds.toLocaleString(),coverage:coverage!=null?t('status.waveCoverage',{percent:Math.round(coverage*100)}):'',duplicates:day.duplicates?t('status.duplicates',{count:day.duplicates})+' ':''}):
+    t('detail.noWaveStatus');
   $('#noWave').hidden=!!day.wave_seconds;
   for(const selector of ['.time-nav','.segment-line','.event-timeline','.workspace-help'])$(selector).hidden=!day.wave_seconds;
   $$('#zoom button').forEach(button=>button.disabled=!day.wave_seconds);
   $('#advanced').disabled=!day.wave_seconds;
-  $('#stats').innerHTML=Object.entries(channels).filter(([key])=>key!=='flow').map(([key,channel])=>`<tr><td>${channel.name}${channelHelp(key,channel)}<small>${channel.unit}</small></td><td>${fmt(day.stats[key]?.median,key==='tidal'?0:1)}</td><td>${fmt(day.stats[key]?.p95,key==='tidal'?0:1)}</td></tr>`).join('');
-  $('#segments').innerHTML=day.segments.map(([lo,hi],i)=>`<button data-segment="${i}" title="保留 ${hi-lo} 秒连续记录">${clock(lo)}–${clock(hi)} (${Math.round((hi-lo)/60)}分)</button>`).join('');
+  $('#stats').innerHTML=Object.entries(channels).filter(([key])=>key!=='flow').map(([key,channel])=>`<tr><td>${channelName(channel)}${channelHelp(key,channel)}<small>${channelUnit(channel)}</small></td><td>${fmt(day.stats[key]?.median,key==='tidal'?0:1)}</td><td>${fmt(day.stats[key]?.p95,key==='tidal'?0:1)}</td></tr>`).join('');
+  $('#segments').innerHTML=day.segments.map(([lo,hi],i)=>`<button data-segment="${i}" title="${t('detail.segmentTitle',{seconds:hi-lo})}">${clock(lo)}–${clock(hi)} (${Math.round((hi-lo)/60)}${t('common.minutes')})</button>`).join('');
   $$('[data-segment]').forEach(button=>button.onclick=()=>{const [lo,hi]=day.segments[Number(button.dataset.segment)];setWindow(Math.max(0,lo-5),Math.min(86400,hi+5));});
   $('#prev').disabled=overview.days[0].date===dayKey;$('#next').disabled=overview.days.at(-1).date===dayKey;
   renderEvents();renderCharts();updateTime();
 }
 function renderEvents() {
   const filtered=detail.events.map((event,index)=>({...event,index})).filter(event=>eventFilter==='all'||event.kind===eventFilter);
-  $('#eventCount').textContent=`${filtered.length} / ${detail.events.length} 条`;
+  $('#eventCount').textContent=t('status.events',{shown:filtered.length,total:detail.events.length});
   $$('#eventFilters button').forEach(button=>button.classList.toggle('selected',button.dataset.kind===eventFilter));
-  $('#eventList').innerHTML=filtered.map(event=>`<tr data-event="${event.index}" tabindex="0" class="${selectedEvent===event.index?'selected':''}" aria-selected="${selectedEvent===event.index}"><td>${clock(event.second)}</td><td class="${event.kind}" title="${eventNames[event.kind]}">${event.kind}</td><td>${event.duration}</td></tr>`).join('')||'<tr><td colspan="3">没有符合条件的事件记录</td></tr>';
+  $('#eventList').innerHTML=filtered.map(event=>`<tr data-event="${event.index}" tabindex="0" class="${selectedEvent===event.index?'selected':''}" aria-selected="${selectedEvent===event.index}"><td>${clock(event.second)}</td><td class="${event.kind}" title="${escape(eventName(event.kind))}">${event.kind}</td><td>${event.duration}</td></tr>`).join('')||`<tr><td colspan="3">${t('detail.noEventRows')}</td></tr>`;
   $$('[data-event]').forEach(row=>{
     row.onclick=()=>selectEvent(Number(row.dataset.event));
     row.onkeydown=event=>{if(event.key==='Enter')selectEvent(Number(row.dataset.event));};
@@ -287,10 +298,11 @@ function updateTime() {
   const visible=detail.events.map((event,index)=>({...event,index})).filter(event=>event.second+60>=lo&&event.second<=hi);
   $('#timeline').innerHTML=visible.map(event=>{
     const x=Math.max(0,(event.second-lo)/(hi-lo)*100),end=Math.min(100,(event.second+60-lo)/(hi-lo)*100);
-    return `<button class="marker ${event.kind} ${selectedEvent===event.index?'selected':''}" data-marker="${event.index}" style="left:${x}%;width:${Math.max(.25,end-x)}%;top:${{OSA:0,CSA:16,HYP:32}[event.kind]}px" aria-label="${event.kind} ${clock(event.second)}" title="${eventNames[event.kind]} ${clock(event.second)}（分钟精度）"></button>`;
+    const label=t('marker.aria',{kind:event.kind,time:clock(event.second)});
+    return `<button class="marker ${event.kind} ${selectedEvent===event.index?'selected':''}" data-marker="${event.index}" style="left:${x}%;width:${Math.max(.25,end-x)}%;top:${{OSA:0,CSA:16,HYP:32}[event.kind]}px" aria-label="${escape(label)}" title="${escape(eventName(event.kind)+' '+clock(event.second)+t('detail.eventMinute'))}"></button>`;
   }).join('');
   $$('[data-marker]').forEach(button=>button.onclick=()=>selectEvent(Number(button.dataset.marker)));
-  $('#sampleHint').textContent=hi-lo<=60?'流量：全部 25 Hz 采样点':'概览保留极值抽样；光标读数为附近显示点';
+  $('#sampleHint').textContent=hi-lo<=60?t('detail.sampleAll'):t('detail.sampleOverviewText');
 }
 function setWindow(lo,hi) {
   lo=Math.max(0,lo);hi=Math.min(86400,hi);
@@ -302,12 +314,9 @@ function panWindow(direction) {
   const width=windowRange[1]-windowRange[0],lo=Math.max(0,Math.min(86400-width,windowRange[0]+width*.8*direction));
   setWindow(lo,lo+width);
 }
-function channelHelp(key,channel) {
-  return channel.help?`<button class="term-help" data-term="${key}" data-title="${escape(channel.name)}" data-explanation="${escape(channel.help)}" aria-label="解释${escape(channel.name)}">?</button>`:'';
-}
 function visibleChannels() {return Object.entries(channels).filter(([key])=>$('#advanced').checked||['flow','ipap','epap','leak'].includes(key));}
 function renderCharts() {
-  $('#charts').innerHTML=detail.wave_seconds?visibleChannels().map(([key,channel])=>`<div class="chart-row"><div class="chart-title"><strong>${channel.name}</strong>${channelHelp(key,channel)}<span class="unit">${channel.unit}</span><output id="value-${key}" aria-label="${channel.name}光标读数">—</output></div><canvas data-series="${key}" height="${channel.height}" aria-label="${channel.name}时间曲线"></canvas></div>`).join(''):'';
+  $('#charts').innerHTML=detail.wave_seconds?visibleChannels().map(([key,channel])=>`<div class="chart-row"><div class="chart-title"><strong>${channelName(channel)}</strong>${channelHelp(key,channel)}<span class="unit">${channelUnit(channel)}</span><output id="value-${key}" aria-label="${escape(t('detail.cursorAria',{name:channelName(channel)}))}">—</output></div><canvas data-series="${key}" height="${channel.height}" aria-label="${escape(t('detail.chartAria',{name:channelName(channel)}))}"></canvas></div>`).join(''):'';
   redraw();
 }
 function nearest(points,time) {
@@ -351,7 +360,7 @@ function drawChart(canvas,key) {
     if(drag!=null){ctx.fillStyle='#447fa126';ctx.fillRect(X(Math.min(time,drag)),top,Math.abs(X(time)-X(drag)),bottom-top);}
     ctx.strokeStyle='#718797';ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(X(time),top);ctx.lineTo(X(time),bottom);ctx.stroke();ctx.setLineDash([]);
     const inSegment=detail.segments.some(([a,b])=>a<=time&&time<b),point=nearest(points,time);
-    $('#value-'+key).textContent=!inSegment||!point||point[1]==null?'无记录':`${fmt(point[1],key==='tidal'?0:2)} ${channel.unit} · ${clock(point[0],true)}`;
+    $('#value-'+key).textContent=!inSegment||!point||point[1]==null?t('detail.valueNoRecord'):t('detail.valueAt',{value:fmt(point[1],key==='tidal'?0:2),unit:channelUnit(channel),time:clock(point[0],true)});
   };
   plots.push({overlay});
   let drag=null;
@@ -373,15 +382,15 @@ function redraw() {
 
 function renderInfo() {
   const waves=overview.days.filter(day=>day.wave);
-  const errors=overview.files.flatMap(file=>(file.unreadable_ranges||[]).map(range=>`${file.name}：文件偏移 ${range[0].toLocaleString()}，跳过 ${range[1].toLocaleString()} 字节`));
-  const fields=[['设备',overview.device.model],['序列号',overview.device.serial],['记录范围',`${overview.days[0].date} — ${overview.days.at(-1).date}`],['有保留波形',waves.length?`${waves.length} 天（${waves[0].date} — ${waves.at(-1).date}，非连续）`:'无'],['导入时间',overview.imported_at.replace('T',' ')],['导入来源',overview.source],['存储位置','当前服务的数据目录（桌面电脑或 NAS）'],['快照文件',`${overview.files.length} 个文件，${fmt(overview.files.reduce((sum,file)=>sum+file.size,0)/1024/1024)} MiB`],['无效数据包',`${overview.invalid_packets.toLocaleString()} 个（含未使用空间与不可读区间）`],['读取异常',errors.length?`${errors.length} 个不可读区间；见下方明细`:'无']];
+  const errors=overview.files.flatMap(file=>(file.unreadable_ranges||[]).map(range=>t('data.info.fileRange',{name:file.name,offset:range[0].toLocaleString(),bytes:range[1].toLocaleString()})));
+  const fields=[[t('data.info.device'),overview.device.model],[t('data.info.serial'),overview.device.serial],[t('data.info.range'),`${overview.days[0].date} — ${overview.days.at(-1).date}`],[t('data.info.waveDays'),waves.length?t('data.info.waveDaysValue',{count:waves.length,start:waves[0].date,end:waves.at(-1).date}):t('data.info.noWave')],[t('data.info.imported'),overview.imported_at.replace('T',' ')],[t('data.info.source'),overview.source],[t('data.info.storage'),t('data.info.storageLocation')],[t('data.info.snapshot'),t('data.info.snapshotValue',{count:overview.files.length,size:fmt(overview.files.reduce((sum,file)=>sum+file.size,0)/1024/1024)})],[t('data.info.invalid'),t('data.info.invalidValue',{count:overview.invalid_packets.toLocaleString()})],[t('data.info.errors'),errors.length?t('data.info.errorValue',{count:errors.length}):t('data.info.noErrors')]];
   $('#dataInfo').innerHTML=fields.map(([key,value])=>`<dt>${key}</dt><dd>${escape(value)}</dd>`).join('');
-  $('#readErrors').innerHTML=errors.length?errors.map(escape).join('<br>'):'未发现文件读取异常。';
+  $('#readErrors').innerHTML=errors.length?errors.map(escape).join('<br>'):t('data.info.noErrors');
 }
 function exportCSV(event) {
   if(!overview){event.preventDefault();return;}
   const range=activeView==='detail'?[dayKey,dayKey]:['overview','report'].includes(activeView)?dateRange:[overview.days[0].date,overview.days.at(-1).date];
-  $('#export').href='api/export?'+new URLSearchParams({start:range[0],end:range[1]});
+  $('#export').href='api/'+localizedPath('export?'+new URLSearchParams({start:range[0],end:range[1]}));
 }
 
 function showImport(){if(!$('#importDialog').open)$('#importDialog').showModal();api('status').then(s=>{$('#localSource').hidden=!s.local_paths;if(s.busy){$('#startImport').disabled=true;pollImport();}}).catch(e=>{$('#importProgress').textContent=e.message;});}
@@ -401,7 +410,7 @@ $$('.nav').forEach(button=>button.onclick=()=>switchView(button.dataset.view));
 $$('#period button').forEach(button=>button.onclick=()=>presetRange(Number(button.dataset.days)));
 $('#applyRange').onclick=()=>{
   const start=$('#rangeStart').value,end=$('#rangeEnd').value;
-  if(!start||!end||start>end||start<overview.days[0].date||end>overview.days.at(-1).date){showError('请选择记录范围内有效的开始和结束日期。');return;}
+  if(!start||!end||start>end||start<overview.days[0].date||end>overview.days.at(-1).date){showError(t('status.invalidRange'));return;}
   showError();dateRange=[start,end];rowLimit=40;$$('#period button').forEach(button=>button.classList.remove('selected'));renderOverview();
 };
 $('#search').oninput=()=>{rowLimit=40;renderRows();};$('#onlyWave').onchange=()=>{rowLimit=40;renderRows();};
@@ -409,7 +418,7 @@ $('#more').onclick=()=>{rowLimit+=60;renderRows();};
 $('#latest').onclick=()=>openDay([...overview.days].reverse().find(day=>day.wave)?.date||overview.days.at(-1).date);
 $('#date').onchange=()=>{
   if(overview.days.some(day=>day.date===$('#date').value))openDay($('#date').value);
-  else{showError('所选日期没有记录。');$('#date').value=dayKey;}
+  else{showError(t('status.noRecordDay'));$('#date').value=dayKey;}
 };
 for(const [id,step] of [['prev',-1],['next',1]])$('#'+id).onclick=()=>{
   const next=overview.days[overview.days.findIndex(day=>day.date===dayKey)+step];if(next)openDay(next.date);
@@ -436,15 +445,15 @@ $('#importForm').onsubmit=async event=>{
   try{
     const file=$('#archiveFile').files[0];
     if(file){
-      if(!/\.zip$/i.test(file.name)||file.size>8*1024**3)throw new Error('请选择不超过 8 GiB 的 ZIP 文件');
+      if(!/\.zip$/i.test(file.name)||file.size>8*1024**3)throw new Error(t('status.zip'));
       await new Promise((resolve,reject)=>{
-        const xhr=new XMLHttpRequest();xhr.open('POST','api/upload');xhr.setRequestHeader('Content-Type','application/zip');
-        xhr.upload.onprogress=e=>{$('#importProgress').textContent=e.lengthComputable?`正在上传 ${Math.round(e.loaded/e.total*100)}% · 上传后自动解析`:'正在上传';};
-        xhr.onload=()=>{let body;try{body=JSON.parse(xhr.responseText);}catch{reject(new Error('上传响应无效'));return;}xhr.status===200?resolve():reject(new Error(body.error||'上传失败'));};
-        xhr.onerror=()=>reject(new Error('连接中断，请检查网络后重新上传'));xhr.send(file);
+        const xhr=new XMLHttpRequest();xhr.open('POST','api/'+localizedPath('upload'));xhr.setRequestHeader('Content-Type','application/zip');
+        xhr.upload.onprogress=e=>{$('#importProgress').textContent=e.lengthComputable?t('status.uploadPercent',{percent:Math.round(e.loaded/e.total*100)}):t('status.uploading');};
+        xhr.onload=()=>{let body;try{body=JSON.parse(xhr.responseText);}catch{reject(new Error(t('status.uploadInvalid')));return;}xhr.status===200?resolve():reject(new Error(body.error||t('status.uploadFailed')));};
+        xhr.onerror=()=>reject(new Error(t('status.connection')));xhr.send(file);
       });
     }else{
-      if(!$('#sourcePath').value)throw new Error('请先选择 ZIP 文件，或使用桌面工具栏选择数据');
+      if(!$('#sourcePath').value)throw new Error(t('status.sourceRequired'));
       await api('import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:$('#sourcePath').value})});
     }
     pollImport();
@@ -455,3 +464,12 @@ document.onkeydown=event=>{
   if(event.key==='ArrowLeft'||event.key==='ArrowRight'){event.preventDefault();panWindow(event.key==='ArrowLeft'?-1:1);}
 };
 let resizeTimer;window.onresize=()=>{clearTimeout(resizeTimer);resizeTimer=setTimeout(redraw,120);};
+window.addEventListener('breath-view:locale',()=>{
+  if(!overview)return;
+  $('#device').textContent=overview.device.model;
+  $('#importStamp').textContent=t('status.importTime',{value:overview.imported_at.replace('T',' ')});
+  $('#statusText').textContent=t('status.device',{model:overview.device.model,days:overview.days.length});
+  renderInfo();
+  if(activeView==='overview')renderOverview();
+  if(activeView==='detail'&&detail){renderDetail();}
+});

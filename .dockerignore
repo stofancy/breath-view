@@ -6,6 +6,7 @@
 !reader.py
 !analysis_report.py
 !patient_summary.py
+!i18n.py
 !portable_report.py
 !web/
 !web/**

@@ -9,6 +9,7 @@ from datetime import date
 from storage import load, import_source, DEFAULT_HOME, MAX_ARCHIVE_BYTES
 from analysis_report import build_report, report_markdown, report_html, validate_context, period
 from portable_report import mobile_html, mobile_pdf
+from i18n import normalize_locale
 
 ROOT=Path(__file__).resolve().parent
 LOG_NAME='breath-view.log'
@@ -118,6 +119,7 @@ def serve(app,port=0,host='127.0.0.1'):
             self._request_started=time.monotonic()
             route,q=self.route()
             if route is None:return self.respond({'error':'Not found'},404)
+            locale=normalize_locale(q.get('locale',['zh-CN'])[0])
             try:
                 if route=='api/status':return self.respond({**app.status,'local_paths':not remote})
                 # Build a consistent snapshot under the data lock, then release it
@@ -126,7 +128,7 @@ def serve(app,port=0,host='127.0.0.1'):
                     with app.lock:
                         if not app.data:raise ValueError('请先导入设备数据')
                         start=q.get('start',[''])[0];end=q.get('end',[''])[0]
-                        report=build_report(app.data,start,end,app.get_context(start,end))
+                        report=build_report(app.data,start,end,app.get_context(start,end),locale=locale)
                     if route.endswith('.pdf'):
                         logging.info('mobile pdf export started start=%s end=%s',start,end)
                         raw=mobile_pdf(report)
@@ -138,7 +140,7 @@ def serve(app,port=0,host='127.0.0.1'):
                         if route=='api/overview':return self.respond(app.data.overview())
                         if route in ('api/report','api/report.md','api/report.html'):
                             start=q.get('start',[''])[0];end=q.get('end',[''])[0]
-                            report=build_report(app.data,start,end,app.get_context(start,end))
+                            report=build_report(app.data,start,end,app.get_context(start,end),locale=locale)
                             if route.endswith('.html'):
                                 return self.respond(report_html(report).encode(),kind='text/html; charset=utf-8',filename=f'pap-review-{start}-{end}.html')
                             if route.endswith('.md'):
@@ -151,13 +153,14 @@ def serve(app,port=0,host='127.0.0.1'):
                             end=date.fromisoformat(q.get('end',[days[-1]['date']])[0]).isoformat()
                             if start>end:raise ValueError('开始日期晚于结束日期')
                             s=io.StringIO();w=csv.writer(s)
-                            w.writerow(['治疗日（中午起）','设备使用分钟（历史摘要）','OSA记录条目','CSA记录条目','HYP记录条目','事件记录频率（条目每小时，估算）','保留波形','摘要状态'])
+                            headers = ['Treatment day (starts at noon)','Device treatment minutes (settled summary)','OSA entries','CSA entries','HYP entries','Event frequency (entries/hour, estimated)','Retained waveform','Summary status'] if locale == 'en-US' else ['治疗日（中午起）','设备使用分钟（历史摘要）','OSA记录条目','CSA记录条目','HYP记录条目','事件记录频率（条目每小时，估算）','保留波形','摘要状态']
+                            w.writerow(headers)
                             for d in days:
                                 if start<=d['date']<=end:
-                                    w.writerow([d['date'],d['minutes'],*[d['counts'][k] for k in ('OSA','CSA','HYP')],d['index'],'有' if d['wave'] else '无','未结算' if d['current'] else '已结算'])
+                                    w.writerow([d['date'],d['minutes'],*[d['counts'][k] for k in ('OSA','CSA','HYP')],d['index'],('Available' if d['wave'] else 'None') if locale == 'en-US' else ('有' if d['wave'] else '无'),('Pending' if d['current'] else 'Settled') if locale == 'en-US' else ('未结算' if d['current'] else '已结算')])
                             return self.respond(('\ufeff'+s.getvalue()).encode(),kind='text/csv; charset=utf-8',filename=f'breath-summary-{start}-{end}.csv')
                     return self.respond({'error':'Not found'},404)
-                assets={'':('index.html','text/html; charset=utf-8'),'app.js':('app.js','text/javascript; charset=utf-8'),'report.js':('report.js','text/javascript; charset=utf-8'),'style.css':('style.css','text/css; charset=utf-8'),'icon.svg':('icon.svg','image/svg+xml')}
+                assets={'':('index.html','text/html; charset=utf-8'),'app.js':('app.js','text/javascript; charset=utf-8'),'report.js':('report.js','text/javascript; charset=utf-8'),'i18n.js':('i18n.js','text/javascript; charset=utf-8'),'style.css':('style.css','text/css; charset=utf-8'),'icon.svg':('icon.svg','image/svg+xml')}
                 if route not in assets:return self.respond({'error':'Not found'},404)
                 name,kind=assets[route]
                 return self.respond((ROOT/'web'/name).read_bytes(),kind=kind)

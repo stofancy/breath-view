@@ -2,8 +2,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from analysis_report import aggregate, build_report, report_html, validate_context
+from analysis_report import aggregate, build_report, report_html, report_markdown, validate_context
 from app import Application
+from i18n import normalize_locale
 from patient_summary import compare, previous_year
 from portable_report import mobile_html
 
@@ -82,6 +83,25 @@ class AnalysisTests(unittest.TestCase):
         self.assertNotIn('<script',exported)
         self.assertEqual([p['state'] for p in r['patient']['trend']],['settled','pending','missing'])
         self.assertIsNone(r['patient']['trend'][1]['frequency'])
+
+    def test_english_locale_covers_json_markdown_html_and_mobile_exports(self):
+        rows=[row(f'2026-09-{n:02}',360,n) for n in range(1,8)]
+        ds=SimpleNamespace(catalog={'device':{'model':'TEST'}},overview=lambda:{'days':rows})
+        report=build_report(ds,'2026-09-01','2026-09-07',{'note':'<script>alert(1)</script>'},locale='en')
+        self.assertEqual(report['locale'],'en-US')
+        self.assertEqual(normalize_locale('fr-FR'),'zh-CN')
+        self.assertIn('Average treatment time',report['patient']['detail'])
+        self.assertNotIn('平均戴机',str(report))
+        markdown=report_markdown(report)
+        self.assertTrue(markdown.startswith('# PAP treatment record review\n'))
+        self.assertIn('Questions for follow-up',markdown)
+        rendered=report_html(report)
+        self.assertIn('<html lang="en-US">',rendered)
+        self.assertNotIn('<script>',rendered)
+        self.assertIn('&lt;script&gt;',rendered)
+        mobile=mobile_html(report)
+        self.assertIn('<html lang="en-US">',mobile)
+        self.assertIn('Scope and sources',mobile)
 
     def treatment_periods(self, current_count, previous_count, current_minutes=360, year_count=6):
         rows=[row(f'2025-09-{n:02}',360,year_count) for n in range(1,8)]

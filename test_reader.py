@@ -125,7 +125,7 @@ class ExportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path=Path(temp)/'test.USR';path.write_bytes(usr_bytes())
             _,days=parse_usr(path)
-            app=SimpleNamespace(data=Dataset(temp,{'days':days,'spans':{}}),lock=threading.RLock())
+            app=SimpleNamespace(data=Dataset(temp,{'days':days,'spans':{}}),lock=threading.RLock(),get_context=lambda start,end:{})
             server,url=serve(app)
             try:
                 with urllib.request.urlopen(url+'api/export?start=2026-09-12&end=2026-09-12') as response:
@@ -135,6 +135,14 @@ class ExportTests(unittest.TestCase):
                     self.assertEqual(rows[1][0],'2026-09-12')
                     self.assertEqual(rows[1][1],'')
                     self.assertEqual(rows[1][5],'')
+                with urllib.request.urlopen(url+'api/report?start=2026-09-11&end=2026-09-11&locale=en-US') as response:
+                    report=json.loads(response.read())
+                    self.assertEqual(report['locale'],'en-US')
+                    self.assertIn('Average treatment time',report['patient']['detail'])
+                with urllib.request.urlopen(url+'api/export?start=2026-09-12&end=2026-09-12&locale=en-US') as response:
+                    english_rows=list(csv.reader(io.StringIO(response.read().decode('utf-8-sig'))))
+                    self.assertEqual(english_rows[0][0],'Treatment day (starts at noon)')
+                    self.assertEqual(english_rows[1][7],'Pending')
                 with self.assertRaises(urllib.error.HTTPError) as caught:
                     urllib.request.urlopen(url+'api/export?start=2026-09-12&end=2026-09-11')
                 self.assertEqual(caught.exception.code,400)

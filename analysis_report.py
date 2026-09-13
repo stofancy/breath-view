@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from statistics import median
 import math
 import html
+from i18n import COMPARISON_RULE_EN, CONTEXT_FIELDS_EN, QUESTIONS_EN, SOURCES_EN, normalize_locale
 
 RULE_VERSION = '2.1'
 SOURCES = [
@@ -72,16 +73,17 @@ def aggregate(rows,start,end):
             'type_rates':{kind:count/(total/60) if total>0 else None for kind,count in counts.items()}}
 
 
-def minutes(value):
-    if value is None:return '无可用摘要'
+def minutes(value, locale='zh-CN'):
+    if value is None:return 'No usable summary' if normalize_locale(locale) == 'en-US' else '无可用摘要'
     rounded=round(value)
-    return f'{rounded//60} 小时 {rounded%60} 分'
+    return f'{rounded//60} h {rounded%60} min' if normalize_locale(locale) == 'en-US' else f'{rounded//60} 小时 {rounded%60} 分'
 
 
 def number(value,digits=2):return '—' if value is None else f'{value:.{digits}f}'
 
 
-def build_report(dataset,start,end,context=None):
+def build_report(dataset,start,end,context=None,locale='zh-CN'):
+    locale = normalize_locale(locale)
     lo,hi=period(start,end)
     rows=dataset.overview()['days']
     current=aggregate(rows,start,end)
@@ -93,7 +95,7 @@ def build_report(dataset,start,end,context=None):
         findings.append({'id':id,'title':title,'observed':observed,'meaning':meaning,'action':action,'refs':list(refs),'evidence':list(evidence)})
     selected=[r for r in rows if start<=r['date']<=end]
     settled=[r for r in selected if r['minutes'] is not None and not r['current']]
-    report={'version':RULE_VERSION,'generated_at':datetime.now().isoformat(timespec='seconds'),
+    report={'version':RULE_VERSION,'locale':locale,'generated_at':datetime.now().isoformat(timespec='seconds'),
             'device':dataset.catalog.get('device',{}),'imported_at':dataset.catalog.get('imported_at'),
             'current':current,'previous':previous,'context':context,'findings':findings,'sources':SOURCES}
     if not settled:
@@ -209,13 +211,128 @@ def build_report(dataset,start,end,context=None):
         '若仍困倦或症状再次出现，是否需要进一步评估，或由医生安排复查睡眠监测？'
     ]
     from patient_summary import patient_summary
-    report['patient']=patient_summary(report,rows)
+    report['patient']=patient_summary(report,rows,locale=locale)
+    if locale == 'en-US':
+        report['sources'] = SOURCES_EN
+        report['comparison']['rule'] = COMPARISON_RULE_EN
+        report['questions'] = QUESTIONS_EN
+        report['review_days'] = [dict(day, reasons=[_review_reason_en(reason) for reason in day['reasons']]) for day in report['review_days']]
+        report['findings'] = _english_findings(report)
     v=report['patient']
     report['summary']=v['title']+'。'+v['detail']+v['followup']['title']+'：'+v['followup']['action']
+    if locale == 'en-US':
+        report['summary']=v['title']+'. '+v['detail']+' '+v['followup']['title']+': '+v['followup']['action']
     return report
 
 
+def _review_reason_en(reason):
+    return {
+        '本期间事件条目频率排序靠前': 'High event-entry frequency in this period',
+        '设备使用记录少于 4 小时': 'Device treatment record shorter than 4 hours',
+        '本期间 CSA 条目频率最高，需核对原厂类型': 'Highest CSA entry frequency in this period; check the manufacturer classification',
+    }.get(reason, reason)
+
+
+def _english_findings(report):
+    """Translate selected findings without changing their decision rules."""
+    p, previous, context = report['current'], report['previous'], report['context']
+    length = p['calendar_days']
+    fields = CONTEXT_FIELDS_EN
+    result = []
+    for original in report['findings']:
+        fid = original['id']
+        refs = original['refs']
+        if fid == 'no_summary':
+            value = (f"There is no settled summary in {length} calendar days; {p['pending_days']} days are pending and {p['missing_days']} have no record.",
+                     'No summary does not mean no treatment; retained waveform time is not the same as actual sleep time.',
+                     'Add device records or choose a period that contains settled historical summaries.')
+        elif fid == 'usage':
+            value = (f"{length} calendar days include {p['settled_days']} settled summaries, with treatment recorded on {p['use_days']} days; total {minutes(p['total_minutes'], 'en-US')}, average per recorded day {minutes(p['mean_minutes'], 'en-US')}.",
+                     f"{p['under4_days']} settled days are under 4 hours. Four hours is a descriptive bin, not sufficient therapy and not proof that the whole night was covered.",
+                     'Compare with actual sleep, wake and nap times to check use during every sleep period. Address mask discomfort or removal that limits use.')
+        elif fid == 'events':
+            value = (f"There are {sum(p['counts'].values())} event entries, weighted by treatment time to {number(p['frequency'])} entries/hour; OSA {p['counts']['OSA']}, CSA {p['counts']['CSA']}, HYP {p['counts']['HYP']}.",
+                     'These are device entries and may be grouped by minute. Without EEG sleep time and independent oxygen data, they cannot be converted to a validated clinical AHI or rule out residual sleep-related breathing problems.',
+                     'Review dates with concentrated entries alongside symptoms, the manufacturer report and the corresponding waveform. A clinician should decide whether repeat sleep testing is needed.')
+        elif fid == 'comparison':
+            change = p['mean_minutes'] - previous['mean_minutes']
+            rate_text = f"; event-entry frequency changed from {number(previous['frequency'])} to {number(p['frequency'])}/h" if p['frequency'] is not None and previous['frequency'] is not None else ''
+            value = (f"Average treatment time per recorded day changed from {minutes(previous['mean_minutes'], 'en-US')} to {minutes(p['mean_minutes'], 'en-US')} ({'increased' if change >= 0 else 'decreased'} {abs(change):.0f} minutes){rate_text}.",
+                     f"The comparison period was {previous['start']} to {previous['end']}; the two periods contain {previous['settled_days']} and {p['settled_days']} settled summaries. This is descriptive and does not prove improvement, worsening or that a pressure change worked.",
+                     'If the change coincides with a mask replacement, position, schedule or treatment adjustment, record the date for follow-up.')
+        elif fid == 'comparison_limited':
+            value = (f"The current period has {p['settled_days']}/{length} settled summaries; the adjacent period has {previous['settled_days']}/{length}.",
+                     COMPARISON_RULE_EN,
+                     'Choose a more complete period; the raw summaries remain available for review.')
+        elif fid == 'quality':
+            gap = ' The imported snapshot also contains unreadable file ranges that cannot be assigned reliably to a date.' if '读取缺口' in original['observed'] else ''
+            value = (f"{p['wave_days']} / {length} days have retained waveforms, {p['missing_days']} have no summary and {p['pending_days']} are pending.{gap}",
+                     'Complete summaries and complete waveforms are different. A small amount of retained waveform cannot represent the whole period, and pressure/leak channel meanings have not been checked item by item against the manufacturer.',
+                     'Keep the original card and local copy. Bring the manufacturer report or sleep-study report to follow-up and check device time and missing records.')
+        elif fid == 'wave_review':
+            value = (f"Event frequency and short-use records selected {len(report['wave_reviews'])} waveform dates for closer review. Each lists waveform coverage, pressure/leak percentiles, gaps longer than 5 minutes and whether event minutes overlap retained data.",
+                     'Five minutes is a navigation aid, not an arousal standard. A gap does not prove awakening or mask removal, and co-occurring pressure/leak changes do not prove causation.',
+                     'Open the synchronized waveform for each date and compare it with the night\'s experience and the manufacturer event labels.')
+        elif fid == 'context_missing':
+            value = ('Daytime sleepiness, mask problems, mask-off periods and self-reported sleep time have not been entered for this period.',
+                     'The current direction is based mainly on device records. How you feel after sleep can help distinguish a numerical change from actual recovery.',
+                     'Add the self-report below. If symptoms persist or return, take the report to a sleep clinician.')
+        elif fid == 'sleep_coverage':
+            hours = context['sleep_hours']; diff = hours * 60 - p['mean_minutes']
+            value = (f"Self-reported average sleep was {minutes(hours * 60, 'en-US')}; average device treatment time was {minutes(p['mean_minutes'], 'en-US')}, a difference of {abs(diff):.0f} minutes ({'sleep time was longer' if diff > 0 else 'treatment time was longer or equal'}).",
+                     'The two averages use different definitions and may include awake treatment, naps or recall error. The difference is not an exact untreated-sleep duration.',
+                     'For one week, record sleep onset, waking, naps and mask-off times, then check for sleep periods without treatment.')
+        elif fid == 'persistent_symptoms':
+            value = ('You reported persistent or worsening daytime sleepiness during this period.',
+                     'Even a low device-entry frequency cannot rule out insufficient treatment or another cause of sleepiness.',
+                     'Contact a sleep clinic with this report. Check total sleep, all-night use, mask fit and manufacturer residual-event data before a clinician decides on further assessment or repeat testing.')
+        elif fid == 'mask_issue':
+            value = ('You reported mask leak, noise or mouth/nose dryness affecting use during this period.',
+                     'The leak channel in this software is not validated; a low displayed value cannot rule out real discomfort.',
+                     'Ask equipment support or a sleep clinic to check mask fit and tubing. Record when discomfort occurs for waveform comparison; leave pressure changes to a clinician.')
+        elif fid == 'mask_off':
+            value = ('You reported removing the mask during sleep or not putting it back on after waking.',
+                     'Events recorded while the device is worn cannot describe breathing during mask-off periods.',
+                     'Record why and when the mask was removed, address the barrier first and discuss complete sleep-period coverage with a clinician.')
+        elif fid == 'inconsistent_summary':
+            value = (f"{p['zero_duration_event_days']} days have zero treatment time but contain event entries.",
+                     'Those entries were excluded from the frequency denominator.',
+                     'Check the manufacturer report and device clock.')
+        elif fid.startswith('symptom_'):
+            key = fid.removeprefix('symptom_')
+            label = fields.get(key, key)
+            action = 'When drowsy, do not drive or operate dangerous equipment; contact a clinician promptly.' if key == 'drowsy_driving' else 'Contact a sleep clinic to review treatment coverage and the cause of persistent symptoms.'
+            value = (f"You reported: {label}.", 'Device numbers cannot replace symptom assessment.', action)
+        else:
+            value = (original['observed'], original['meaning'], original['action'])
+        result.append({'id': fid, 'title': _finding_title_en(fid), 'observed': value[0], 'meaning': value[1], 'action': value[2], 'refs': refs, 'evidence': original.get('evidence', [])})
+    return result
+
+
+def _finding_title_en(fid):
+    return {
+        'no_summary': 'Treatment and event trend cannot be assessed for this period',
+        'usage': 'Confirmed treatment use',
+        'events': 'Respiratory event level and what to check next',
+        'comparison': 'Compared with the adjacent period',
+        'comparison_limited': 'No before-and-after conclusion for this period',
+        'quality': 'Evidence coverage for this conclusion',
+        'wave_review': 'Waveform review material prepared for priority dates',
+        'context_missing': 'Adding your experience can improve the assessment',
+        'sleep_coverage': 'Check treatment time against self-reported sleep time',
+        'persistent_symptoms': 'Review persistent sleepiness with a sleep clinician',
+        'mask_issue': 'Address the mask problem that affects use first',
+        'mask_off': 'Check sleep periods without the mask',
+        'inconsistent_summary': 'Summary inconsistency needs checking',
+        'symptom_unrefreshed': 'Attention: often still unrefreshed after waking',
+        'symptom_gasping': 'Attention: repeated gasping or witnessed pauses',
+        'symptom_drowsy_driving': 'Attention: unsafe drowsiness',
+    }.get(fid, fid)
+
+
 def report_markdown(report):
+    if normalize_locale(report.get('locale')) == 'en-US':
+        return report_markdown_en(report)
     p=report['current'];previous=report['previous']
     lines=['# PAP 治疗记录分析报告','',f"设备：{report['device'].get('model','未知')} · 期间：{p['start']} 至 {p['end']}",
            f"生成：{report['generated_at']} · 数据导入：{report.get('imported_at') or '未记录'} · 规则版本：{report['version']}",
@@ -245,8 +362,51 @@ def report_markdown(report):
     lines.extend(f"- [{source['title']}]({source['url']})" for source in SOURCES)
     return '\n'.join(lines)+'\n'
 
+
+def report_markdown_en(report):
+    p, previous, context = report['current'], report['previous'], report['context']
+    answer = {'yes': 'Yes', 'no': 'No', 'unknown': 'Not answered'}
+    lines = [
+        '# PAP treatment record review', '',
+        f"Device: {report['device'].get('model', 'Unknown')} · Period: {p['start']} to {p['end']}",
+        f"Generated: {report['generated_at']} · Data imported: {report.get('imported_at') or 'Not recorded'} · Rule version: {report['version']}",
+        '', '## Period conclusion', '', report['summary'],
+        '', '> Based on device parsing that has not been checked item by item against the manufacturer and on patient self-report; for record review, not diagnosis or pressure prescription.',
+        '', '## Comparison with the adjacent period', '', f"Adjacent period: {previous['start']} to {previous['end']}", '',
+        '| Metric | Current period | Adjacent period |', '|---|---:|---:|',
+        f"| Settled record days | {p['settled_days']}/{p['calendar_days']} | {previous['settled_days']}/{previous['calendar_days']} |",
+        f"| Average treatment time | {minutes(p['mean_minutes'], 'en-US')} | {minutes(previous['mean_minutes'], 'en-US')} |",
+        f"| Weighted event entries/hour | {number(p['frequency'])} | {number(previous['frequency'])} |", '',
+    ]
+    for finding in report['findings']:
+        lines.extend(['## ' + finding['title'], '', 'Observation: ' + finding['observed'], '', 'Interpretation: ' + finding['meaning'], '', 'Next step: ' + finding['action'], ''])
+    lines += ['## Patient self-report for this period', '']
+    for key, label in CONTEXT_FIELDS_EN.items():
+        lines.append(f"- {label}: {answer[context[key]]}")
+    lines.append('- Average sleep time: ' + (f"{context['sleep_hours']} hours" if context['sleep_hours'] else 'Not answered'))
+    if context['note']:
+        lines += ['', 'Patient note:', '', *['    ' + line for line in context['note'].splitlines()]]
+    lines += ['', '## Dates prioritized for review', '']
+    for day in report['review_days']:
+        lines.append(f"- {day['date']}: {'; '.join(day['reasons'])}; treatment {minutes(day['minutes'], 'en-US')}; events {number(day['frequency'])}/h; {'waveform available' if day['wave'] else 'no waveform'}")
+    lines += ['', '## Waveform review material (purposeful sample, not extrapolated)', '']
+    for day in report['wave_reviews']:
+        if 'error' in day:
+            lines.append(f"- {day['date']}: read failed")
+            continue
+        lines.append(f"- {day['date']}: {day['wave_seconds']} seconds of retained waveform; about {number(day['coverage'] * 100 if day['coverage'] is not None else None, 0)}% of summary treatment time; {len(day['gaps'])} gaps of at least 5 minutes; {day['events_with_wave']}/{day['events']} event minutes overlap retained waveform.")
+        for key, label in [('pressure', 'Pressure cmH2O'), ('leak', 'Device leak L/min')]:
+            stat = day['stats'].get(key, {})
+            lines.append(f"  - {label}: median {number(stat.get('median'))}, P95 {number(stat.get('p95'))}.")
+    lines += ['', '## Questions for follow-up', '', *['- ' + q for q in report['questions']], '', '## Evidence and interpretation rules', '', report['comparison']['rule']]
+    lines.extend(f"- [{source['title']}]({source['url']})" for source in report['sources'])
+    return '\n'.join(lines) + '\n'
+
+
 def report_html(report):
     """Standalone report: no scripts, remote assets, or hidden patient data."""
+    if normalize_locale(report.get('locale')) == 'en-US':
+        return report_html_en(report)
     e=lambda value:html.escape(str(value))
     p=report['current'];prev=report['previous'];context=report['context']
     comparison=''.join(f'<tr><th>{e(name)}</th><td>{e(a)}</td><td>{e(b)}</td></tr>' for name,a,b in [
@@ -275,3 +435,40 @@ def report_html(report):
 <h2>优先复核日期</h2><p class="note">按事件条目频率、短用机记录及 CSA 条目频率筛选；排序不等于异常诊断。</p><table><thead><tr><th>日期</th><th>原因</th><th>用机</th><th>条目/h</th><th>波形</th></tr></thead><tbody>{review or '<tr><td colspan="5">无符合筛选条件的日期。</td></tr>'}</tbody></table>
 <h2>重点波形资料（最多3天）</h2>{''.join(waves) or '<p>优先日期没有可用波形。</p>'}<p class="note">压力通道沿用 OSCAR 的 BMC 旧格式解释，待原厂核验。有目的抽样不代表整个期间。记录间隔不等于觉醒；事件分钟与波形有交集不代表识别正确。</p>
 <h2>复诊核对问题</h2><ol>{''.join('<li>'+e(q)+'</li>' for q in report['questions'])}</ol><h2>依据</h2><ul>{sources}</ul></html>'''
+
+
+def report_html_en(report):
+    """Render a self-contained English review report."""
+    e = lambda value: html.escape(str(value))
+    p, previous, context = report['current'], report['previous'], report['context']
+    answer = {'yes': 'Yes', 'no': 'No', 'unknown': 'Not answered'}
+    comparison = ''.join(f'<tr><th>{e(name)}</th><td>{e(a)}</td><td>{e(b)}</td></tr>' for name, a, b in [
+        ('Settled record days', f"{p['settled_days']}/{p['calendar_days']}", f"{previous['settled_days']}/{previous['calendar_days']}"),
+        ('Average treatment time', minutes(p['mean_minutes'], 'en-US'), minutes(previous['mean_minutes'], 'en-US')),
+        ('Weighted event entries/hour (estimated)', number(p['frequency']), number(previous['frequency'])),
+        ('OSA / CSA / HYP entries', ' / '.join(str(v) for v in p['counts'].values()), ' / '.join(str(v) for v in previous['counts'].values())),
+        ('Days under 4 hours', p['under4_days'], previous['under4_days']),
+        ('Days with retained waveform', p['wave_days'], previous['wave_days']),
+    ])
+    findings = ''.join(f"<section><h3>{e(finding['title'])}</h3><p><b>Observation:</b> {e(finding['observed'])}</p><p><b>Interpretation:</b> {e(finding['meaning'])}</p><p><b>Next step:</b> {e(finding['action'])}</p></section>" for finding in report['findings'])
+    context_rows = ''.join(f"<tr><th>{e(label)}</th><td>{e(answer[context[key]])}</td></tr>" for key, label in CONTEXT_FIELDS_EN.items())
+    context_sleep = f"{context['sleep_hours']} hours" if context['sleep_hours'] else 'Not answered'
+    review = ''.join(f"<tr><td>{e(day['date'])}</td><td>{e('; '.join(day['reasons']))}</td><td>{e(minutes(day['minutes'], 'en-US'))}</td><td>{e(number(day['frequency']))}</td><td>{'Available' if day['wave'] else 'None'}</td></tr>" for day in report['review_days'])
+    waves = []
+    for day in report['wave_reviews']:
+        if 'error' in day:
+            waves.append(f"<p>{e(day['date'])}: read failed.</p>")
+            continue
+        pressure, leak = day['stats'].get('pressure', {}), day['stats'].get('leak', {})
+        waves.append(f"<section><h3>{e(day['date'])}</h3><p>{day['wave_seconds']} seconds of retained waveform; about {number(day['coverage'] * 100 if day['coverage'] is not None else None, 0)}% of summary treatment time; {len(day['gaps'])} gaps of at least 5 minutes. {day['events_with_wave']}/{day['events']} event minutes overlap retained waveform.</p><p>Pressure median/P95 {number(pressure.get('median'))}/{number(pressure.get('p95'))} cmH₂O; device leak median/P95 {number(leak.get('median'))}/{number(leak.get('p95'))} L/min.</p></section>")
+    sources = ''.join(f"<li><a href='{e(source['url'])}' rel='noreferrer'>{e(source['title'])}</a></li>" for source in report['sources'])
+    return f'''<!doctype html><html lang="en-US"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PAP treatment review {e(p['start'])} — {e(p['end'])}</title>
+<style>body{{font:13px/1.8 sans-serif;color:#20374a;max-width:950px;margin:28px auto;padding:0 24px}}h1{{font-size:23px;margin:0}}h2{{font-size:17px;border-bottom:1px solid #bbc9d3;margin-top:24px}}h3{{font-size:14px;margin:12px 0 5px}}p{{margin:5px 0}}.meta,.note{{font-size:11px;color:#637988}}.summary{{background:#edf3f7;border-left:3px solid #44789a;padding:12px;margin:15px 0}}table{{width:100%;border-collapse:collapse;font-size:12px}}th,td{{border:1px solid #d5dfe6;padding:7px;text-align:left}}th{{background:#f1f5f8;font-weight:500}}section{{break-inside:avoid;border-bottom:1px solid #e0e5e9;padding-bottom:9px}}.self{{white-space:pre-wrap}}a{{color:#225f89}}@page{{size:A4;margin:16mm}}@media print{{body{{margin:0;padding:0;font-size:11px;max-width:none}}.print-hint{{display:none}}h2{{break-after:avoid}}tr{{break-inside:avoid}}thead{{display:table-header-group}}}}</style>
+<p class="print-hint">This report works offline. Use the browser's Print command to save it as PDF.</p><h1>PAP treatment record review</h1><p class="meta">Device: {e(report['device'].get('model','Unknown'))} · Period: {e(p['start'])} to {e(p['end'])}<br>Generated: {e(report['generated_at'])} · Data imported: {e(report.get('imported_at') or 'Not recorded')} · Analysis rule {e(report['version'])}</p>
+<div class="summary"><b>Period conclusion</b><p>{e(report['summary'])}</p></div><p class="note">Based on device parsing and patient self-report; manufacturer definitions have not been checked item by item. For record review, not diagnosis or pressure prescription.</p>
+<h2>Period summary and comparison</h2><p class="note">Adjacent period: {e(previous['start'])} to {e(previous['end'])}</p><table><thead><tr><th>Metric</th><th>Current period</th><th>Adjacent period</th></tr></thead><tbody>{comparison}</tbody></table><p class="note">{e(report['comparison']['rule'])}</p>
+<h2>Patient self-report for this period</h2><table>{context_rows}<tr><th>Average self-reported sleep</th><td>{e(context_sleep)}</td></tr></table><p class="self">{e(context['note'] or 'No additional note.')}</p>
+<h2>Observations, interpretation and next steps</h2>{findings}
+<h2>Dates prioritized for review</h2><p class="note">Selected by event-entry frequency, short treatment use and CSA entry frequency; ranking is not an abnormality diagnosis.</p><table><thead><tr><th>Date</th><th>Reason</th><th>Treatment</th><th>Entries/h</th><th>Waveform</th></tr></thead><tbody>{review or '<tr><td colspan="5">No dates matched the selection rules.</td></tr>'}</tbody></table>
+<h2>Priority waveform material (up to 3 days)</h2>{''.join(waves) or '<p>No priority date has an available waveform.</p>'}<p class="note">Purposeful sampling does not represent the whole period. A gap does not prove arousal; overlap between event minutes and waveform does not prove correct classification.</p>
+<h2>Questions for follow-up</h2><ol>{''.join('<li>'+e(q)+'</li>' for q in report['questions'])}</ol><h2>Evidence</h2><ul>{sources}</ul></html>'''

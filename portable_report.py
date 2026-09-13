@@ -10,9 +10,54 @@ from pathlib import Path
 import subprocess
 import sys
 from analysis_report import minutes, number
+from i18n import normalize_locale
+
+
+def mobile_sections_en(report):
+    e = lambda v: html.escape(str(v))
+    p, v, c = report['current'], report['patient'], report['context']
+    f = v['followup']
+    answer = {'yes': 'Yes', 'no': 'No', 'unknown': 'Not answered'}
+    blocks = []
+    comparisons = []
+    for key, label in [('previous', 'Adjacent period'), ('year', 'Same period last year')]:
+        comp = v['comparisons'][key]; other = comp['period']
+        use = ''
+        if comp['minutes_delta'] is not None:
+            diff = comp['minutes_delta']
+            use = f"; average treatment time {'increased' if diff >= 0 else 'decreased'} by {abs(diff):.0f} minutes"
+        comparisons.append(f"<h3>{label} · {e(comp['text'])}</h3><p>{other['start']} to {other['end']}, {other['settled_days']}/{other['calendar_days']} days calculable.</p><p>Entries/hour {number(other['frequency'])} → {number(p['frequency'])}{e(use)}.</p>" if comp['eligible'] else f"<h3>{label}</h3><p>{other['start']} to {other['end']}: {e(comp['text'])} ({other['settled_days']}/{other['calendar_days']} days calculable).</p>")
+    blocks.append(('Recent treatment and next step', f"""
+        <div class="lead"><h2>{e(v['title'])}</h2><p>{e(v['detail'])}</p></div>
+        <p class="note">{e(v['boundary'])}</p><h3>Main reasons</h3><ul>{''.join('<li>'+e(reason)+'</li>' for reason in v['assessment']['reasons'][:3])}</ul>
+        <h3>Should I contact a clinician?</h3><p><b>{e(f['title'])}</b></p><p>{e(f['reason'])}</p><p>{e(f['action'])}</p>
+        {''.join(comparisons)}"""))
+    context = ''.join(f"<p><b>{e(label)}</b><br>{answer[c[key]]}</p>" for key, label in v['context_labels'].items())
+    blocks.append(('My experience and follow-up questions', f"""<p class="note">The following self-report covers {e(p['start'])} to {e(p['end'])}; unanswered items remain unknown.</p>
+        <p><b>Average sleep per day, including naps</b><br>{e(str(c['sleep_hours']) + ' hours' if c['sleep_hours'] is not None else 'Not answered')}</p>
+        {context}<h3>What I would like the clinician to confirm</h3><ol>{''.join('<li>'+e(q)+'</li>' for q in v['questions'])}</ol>"""))
+    if c['note']:
+        blocks.append(('Additional note · patient self-report', '<p>' + e(c['note']).replace('\n', '<br>') + '</p>'))
+    days = ''.join(f"<p><b>{e(d['date'])}</b> · {number(d['frequency'])} entries/hour<br>Treatment {e(minutes(d['minutes'], 'en-US'))} · {'waveform available' if d['wave'] else 'no waveform'}<br>{e('; '.join(d['reasons']))}</p>" for d in report['review_days'][:5])
+    blocks.append(('Data for clinician review', f"""
+        <p>{e(v['coverage'])}</p><p><b>Period total</b><br>Treatment {e(minutes(p['total_minutes'], 'en-US'))}; {p['use_days']} days with use, average recorded-day treatment {e(minutes(p['mean_minutes'], 'en-US'))}.</p>
+        <p><b>Device event entries</b><br>OSA obstructive apnea {p['counts']['OSA']}<br>CSA central apnea {p['counts']['CSA']}<br>HYP hypopnea {p['counts']['HYP']}</p>
+        <p>Total {sum(p['counts'].values())} entries ÷ {number(p['total_minutes'] / 60)} treatment hours = {number(p['frequency'])} entries/hour.</p>
+        <h3>Priority dates (ranking is not a diagnosis)</h3>{days or '<p>No records matched the selection rules.</p>'}
+        <p class="note">Summaries may be complete while waveforms are missing. This page contains summary numbers only, not raw waveforms.</p>"""))
+    blocks.append(('Scope and sources', f"""
+        <p>Device: {e(report['device'].get('model', 'Unknown'))}<br>Data imported: {e(report.get('imported_at') or 'Not recorded')}<br>Generated: {e(report['generated_at'])}<br>Parsing/analysis rule: {e(report['version'])} · device clock</p>
+        <h3>How to use this summary</h3><p>Parsed from a local SD-card copy; manufacturer definitions have not been checked item by item. Entries may be grouped by minute; frequency uses treatment time as the denominator. Missing and pending days are not treated as zero use. A treatment day starts at noon.</p>
+        <p>{e(report['comparison']['rule'])} The same-period-last-year window is aligned by month and day; February 29 uses February 28. Overlapping periods are not compared automatically.</p>
+        <p>Blood oxygen, actual sleep time, sleep stages and arousals are not parsed here. This cannot establish that treatment is adequate or support self-directed pressure changes. Consider the manufacturer report, original sleep study and symptoms together.</p>
+        <h3>How the provisional assessment is made</h3><p>{e(v['assessment']['confidence_note'])}</p><ul>{''.join('<li>'+e(rule)+'</li>' for rule in v['assessment']['rules'])}</ul>
+        <h3>Main sources</h3><ul>{''.join('<li><a href="'+e(s['url'])+'">'+e(s['title'])+'</a></li>' for s in report['sources'])}</ul>"""))
+    return blocks
 
 
 def mobile_sections(report):
+    if normalize_locale(report.get('locale')) == 'en-US':
+        return mobile_sections_en(report)
     e = lambda v: html.escape(str(v))
     p, v, c = report['current'], report['patient'], report['context']
     f = v['followup']
@@ -55,6 +100,8 @@ def mobile_sections(report):
 
 
 def mobile_html(report):
+    if normalize_locale(report.get('locale')) == 'en-US':
+        return mobile_html_en(report)
     e = lambda v: html.escape(str(v))
     p = report['current']
     blocks = mobile_sections(report)
@@ -63,13 +110,27 @@ def mobile_html(report):
 <style>*{{box-sizing:border-box}}body{{font:16px/1.75 "Noto Sans CJK SC",sans-serif;color:#294553;background:#eef3f4;margin:0;overflow-wrap:anywhere}}main{{max-width:560px;margin:auto;background:#fff;padding:24px 20px;min-height:100vh}}header{{border-top:4px solid #406d7d;padding-top:16px}}h1{{font-size:25px;line-height:1.4;margin:8px 0}}h2{{font-size:21px;line-height:1.5}}h3{{font-size:17px;margin:20px 0 6px}}p{{margin:10px 0}}.kicker,.note{{font-size:13px;color:#637b85}}.lead{{border-left:3px solid #568696;padding:1px 0 1px 14px;margin:18px 0}}.section-title{{font-size:18px;color:#3e697a}}section,details{{border-top:1px solid #cfdbdf;margin-top:24px;padding-top:14px}}summary{{font-weight:bold;cursor:pointer;padding:6px 0}}a{{color:#276884}}li{{margin-bottom:10px}}ul,ol{{padding-left:23px}}footer{{margin-top:30px;font-size:12px;color:#6c8089}}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}section{{break-before:page}}header+section{{break-before:auto}}details{{display:block}}}}</style></head><body><main><header><div class="kicker">息览 · 手机复诊摘要</div><h1>睡眠呼吸治疗记录</h1><p>{e(p['start'])} 至 {e(p['end'])}<br>{e(report['device'].get('model','未知'))}</p><p class="note">已保存的设备记录与患者自述 · 文件可离线查看</p></header>{body}<footer>序列号不写入此摘要。请同时携带原睡眠监测报告与设备资料。</footer></main></body></html>'''
 
 
+def mobile_html_en(report):
+    e = lambda v: html.escape(str(v))
+    p = report['current']
+    blocks = mobile_sections_en(report)
+    body = ''.join(f'<section><h2 class="section-title">{e(title)}</h2>{content}</section>' if i < 2 else f'<details><summary>{e(title)}</summary>{content}</details>' for i, (title, content) in enumerate(blocks))
+    return f'''<!doctype html><html lang="en-US"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PAP treatment follow-up summary {e(p['end'])}</title>
+<style>*{{box-sizing:border-box}}body{{font:16px/1.75 sans-serif;color:#294553;background:#eef3f4;margin:0;overflow-wrap:anywhere}}main{{max-width:560px;margin:auto;background:#fff;padding:24px 20px;min-height:100vh}}header{{border-top:4px solid #406d7d;padding-top:16px}}h1{{font-size:25px;line-height:1.4;margin:8px 0}}h2{{font-size:21px;line-height:1.5}}h3{{font-size:17px;margin:20px 0 6px}}p{{margin:10px 0}}.kicker,.note{{font-size:13px;color:#637b85}}.lead{{border-left:3px solid #568696;padding:1px 0 1px 14px;margin:18px 0}}.section-title{{font-size:18px;color:#3e697a}}section,details{{border-top:1px solid #cfdbdf;margin-top:24px;padding-top:14px}}summary{{font-weight:bold;cursor:pointer;padding:6px 0}}a{{color:#276884}}li{{margin-bottom:10px}}ul,ol{{padding-left:23px}}footer{{margin-top:30px;font-size:12px;color:#6c8089}}@media print{{body{{background:#fff}}main{{max-width:none;padding:0}}section{{break-before:page}}header+section{{break-before:auto}}details{{display:block}}}}</style></head><body><main><header><div class="kicker">Breath View · phone follow-up summary</div><h1>Sleep and breathing treatment record</h1><p>{e(p['start'])} to {e(p['end'])}<br>{e(report['device'].get('model','Unknown'))}</p><p class="note">Saved device records and patient self-report · works offline</p></header>{body}<footer>The serial number is not included in this summary. Bring the original sleep-study report and device materials.</footer></main></body></html>'''
+
+
 def pdf_document_html(report, section_index):
     e = lambda v: html.escape(str(v))
     p = report['current'];blocks=mobile_sections(report)
+    locale = normalize_locale(report.get('locale'))
+    brand = 'Breath View · phone follow-up summary' if locale == 'en-US' else '息览 · 手机复诊摘要'
+    period_label = 'to' if locale == 'en-US' else '至'
+    device = report['device'].get('model', 'Unknown' if locale == 'en-US' else '未知')
+    section_label = 'section' if locale == 'en-US' else '节'
     content=[]
     for i,(title,body) in enumerate(blocks):
         if i != section_index:continue
-        content.append(f'<div style="page-break-before:auto"><p class="meta">息览 · 手机复诊摘要 · {i+1}/{len(blocks)} 节</p><h1>{e(title)}</h1><p class="meta">{e(p["start"])} 至 {e(p["end"])} · {e(report["device"].get("model","未知"))}</p>{body}</div>')
+        content.append(f'<div style="page-break-before:auto"><p class="meta">{brand} · {i+1}/{len(blocks)} {section_label}</p><h1>{e(title)}</h1><p class="meta">{e(p["start"])} {period_label} {e(p["end"])} · {e(device)}</p>{body}</div>')
     return '''<html><head><meta charset="utf-8"><style>body{font-family:"Droid Sans Fallback";font-size:10.5pt;color:#294553}h1{font-size:18pt;margin-bottom:12px}h2{font-size:14pt}h3{font-size:11.5pt;margin-top:16px;margin-bottom:6px}p{margin-top:6px;margin-bottom:8px;line-height:135%}.meta,.note{font-size:8.5pt;color:#627780}a{color:#276884}li{margin-bottom:8px}</style></head><body>'''+''.join(content)+'</body></html>'
 
 
@@ -91,7 +152,7 @@ def render_pdf_process(report):
     writer.setResolution(96)
     writer.setPageSize(QPageSize(QSizeF(108,240),QPageSize.Millimeter,'Phone'))
     writer.setPageMargins(QMarginsF(8,8,8,8),QPageLayout.Millimeter)
-    writer.setTitle('睡眠呼吸治疗复诊摘要')
+    writer.setTitle('PAP treatment follow-up summary' if normalize_locale(report.get('locale')) == 'en-US' else '睡眠呼吸治疗复诊摘要')
     writer.setCreator('息览 Breath View')
     painter=None
     # One phone-width page per section, sized to its text. This avoids cutting a
