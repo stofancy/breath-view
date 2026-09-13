@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from analysis_report import minutes, number
+from analysis_report import minutes, number, treatment_changes_html
 from i18n import normalize_locale
 
 
@@ -17,6 +17,8 @@ def mobile_sections_en(report):
     e = lambda v: html.escape(str(v))
     p, v, c = report['current'], report['patient'], report['context']
     f = v['followup']
+    freshness = v.get('freshness', {})
+    variability = v.get('variability', {})
     answer = {'yes': 'Yes', 'no': 'No', 'unknown': 'Not answered'}
     blocks = []
     comparisons = []
@@ -28,7 +30,9 @@ def mobile_sections_en(report):
             use = f"; average treatment time {'increased' if diff >= 0 else 'decreased'} by {abs(diff):.0f} minutes"
         comparisons.append(f"<h3>{label} · {e(comp['text'])}</h3><p>{other['start']} to {other['end']}, {other['settled_days']}/{other['calendar_days']} days calculable.</p><p>Entries/hour {number(other['frequency'])} → {number(p['frequency'])}{e(use)}.</p>" if comp['eligible'] else f"<h3>{label}</h3><p>{other['start']} to {other['end']}: {e(comp['text'])} ({other['settled_days']}/{other['calendar_days']} days calculable).</p>")
     blocks.append(('Recent treatment and next step', f"""
+        <p><b>Records through {e(freshness.get('selected_through') or 'no settled record')} (device date)</b></p>
         <div class="lead"><h2>{e(v['title'])}</h2><p>{e(v['detail'])}</p></div>
+        <p>{e(variability.get('text') or '')}</p>
         <p class="note">{e(v['boundary'])}</p><h3>Main reasons</h3><ul>{''.join('<li>'+e(reason)+'</li>' for reason in v['assessment']['reasons'][:3])}</ul>
         <h3>Should I contact a clinician?</h3><p><b>{e(f['title'])}</b></p><p>{e(f['reason'])}</p><p>{e(f['action'])}</p>
         {''.join(comparisons)}"""))
@@ -38,6 +42,8 @@ def mobile_sections_en(report):
         {context}<h3>What I would like the clinician to confirm</h3><ol>{''.join('<li>'+e(q)+'</li>' for q in v['questions'])}</ol>"""))
     if c['note']:
         blocks.append(('Additional note · patient self-report', '<p>' + e(c['note']).replace('\n', '<br>') + '</p>'))
+    if report.get('treatment_changes'):
+        blocks.append(('Patient-recorded treatment changes', treatment_changes_html(report['treatment_changes'], 'en-US')))
     days = ''.join(f"<p><b>{e(d['date'])}</b> · {number(d['frequency'])} entries/hour<br>Treatment {e(minutes(d['minutes'], 'en-US'))} · {'waveform available' if d['wave'] else 'no waveform'}<br>{e('; '.join(d['reasons']))}</p>" for d in report['review_days'][:5])
     blocks.append(('Data for clinician review', f"""
         <p>{e(v['coverage'])}</p><p><b>Period total</b><br>Treatment {e(minutes(p['total_minutes'], 'en-US'))}; {p['use_days']} days with use, average recorded-day treatment {e(minutes(p['mean_minutes'], 'en-US'))}.</p>
@@ -61,6 +67,7 @@ def mobile_sections(report):
     e = lambda v: html.escape(str(v))
     p, v, c = report['current'], report['patient'], report['context']
     f = v['followup']
+    freshness=v['freshness'];variability=v['variability']
     blocks = []
     comparisons = []
     for key, label in [('previous','前一等长期间'),('year','去年同期')]:
@@ -71,14 +78,18 @@ def mobile_sections(report):
             use = f"；平均戴机{'增加' if diff >= 0 else '减少'} {abs(diff):.0f} 分钟"
         comparisons.append(f"<h3>{label} · {e(comp['text'])}</h3><p>{e(other['start'])} 至 {e(other['end'])}，{other['settled_days']}/{other['calendar_days']} 天可计算。</p><p>每小时记录 {number(other['frequency'])} → {number(p['frequency'])}{e(use)}。</p>" if comp['eligible'] else f"<h3>{label}</h3><p>{e(other['start'])} 至 {e(other['end'])}：{e(comp['text'])}（{other['settled_days']}/{other['calendar_days']} 天可计算）。</p>")
     blocks.append(('近期治疗与下一步',f"""
+        <p><b>本期间记录截至 {e(freshness['selected_through'] or '暂无已结算记录')}（设备日期）</b></p>
         <div class="lead"><h2>{e(v['title'])}</h2><p>{e(v['detail'])}</p></div>
+        <p>{e(variability['text'])}</p>
         <p class="note">{e(v['boundary'])}</p><h3>主要判断依据</h3><ul>{''.join('<li>'+e(reason)+'</li>' for reason in v['assessment']['reasons'][:3])}</ul>
         <h3>需要找医生吗</h3><p><b>{e(f['title'])}</b></p><p>{e(f['reason'])}</p><p>{e(f['action'])}</p>
         {''.join(comparisons)}"""))
     context = ''.join(f"<p><b>{e(label)}</b><br>{ {'yes':'是','no':'否','unknown':'未填写'}[c[key]] }</p>" for key,label in v['context_labels'].items())
-    blocks.append(('我的感受与复诊问题',f"""<p class="note">以下为 {e(p['start'])} 至 {e(p['end'])} 的患者自述；未填写保持未知。</p>
+    blocks.append(('我的感受与复诊问题',f"""<p class="note">以下为 {e(p['start'])} 至 {e(p['end'])} 的患者自述；未填写保持未知。保存时间：{e(report.get('context_saved_at') or '未记录')}。</p>
         <p><b>平均每天睡眠（含午睡）</b><br>{e(str(c['sleep_hours'])+' 小时' if c['sleep_hours'] is not None else '未填写')}</p>
         {context}<h3>希望医生帮助确认</h3><ol>{''.join('<li>'+e(q)+'</li>' for q in v['questions'])}</ol>"""))
+    if report.get('treatment_changes'):
+        blocks.append(('治疗变化记录 · 患者填写',treatment_changes_html(report['treatment_changes'])))
     # Keep long user notes off the leading summary pages. All notes remain included.
     if c['note']:
         blocks.append(('补充备注 · 患者自述','<p>'+e(c['note']).replace('\n','<br>')+'</p>'))
@@ -91,7 +102,7 @@ def mobile_sections(report):
         <p class="note">摘要可能完整而波形缺失；本页只有摘要数字，不包含原始波形。波形与原始卡另行携带或在电脑上核对。</p>"""))
     blocks.append(('解释范围与来源',f"""
         <p>设备：{e(report['device'].get('model','未知'))}<br>数据导入：{e(report.get('imported_at') or '未记录')}<br>生成：{e(report['generated_at'])}<br>解析/分析规则：{e(report['version'])} · 设备时钟</p>
-        <h3>这份摘要如何使用</h3><p>从本地 SD 卡副本解析，尚未与原厂逐项核对。事件条目可能按分钟聚合；频率使用戴机时间作分母。缺失和未结算日不作零使用。治疗日从中午 12 点起算。</p>
+        <h3>这份摘要如何使用</h3><p>从本地 SD 卡副本解析，尚未与原厂逐项核对。事件和摘要时长已与 OSCAR 底层解析交叉核对；事件时间精确到分钟，持续秒数按该解析解释。频率使用摘要戴机时间作分母，原厂 AHI 口径仍待核对。缺失和未结算日不作零使用。治疗日从中午 12 点起算。</p>
         <p>{e(report['comparison']['rule'])} 去年同期按同一月日对齐，闰日取 2 月 28 日；重叠期间不自动比较。</p>
         <p>没有已解析的血氧、实际睡眠时长、睡眠分期和觉醒数据；不能判定治疗已达标或自行调整压力。请结合原厂报告、原睡眠监测及症状判断。</p>
         <h3>初步判断如何得出</h3><p>{e(v['assessment']['confidence_note'])}</p><ul>{''.join('<li>'+e(rule)+'</li>' for rule in v['assessment']['rules'])}</ul>

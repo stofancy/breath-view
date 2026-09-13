@@ -142,4 +142,46 @@ class AnalysisTests(unittest.TestCase):
         self.assertIsNone(r['current']['frequency'])
         self.assertEqual(r['patient']['assessment']['state'],'support')
 
+    def test_variability_and_freshness_respect_selected_range(self):
+        rows=[row(f'2026-09-{n:02}',360,36 if n in (1,3,5) else 0) for n in range(1,8)]
+        rows += [row('2026-09-08',None,100,True),row('2026-09-09',0,100),row('2026-09-10',360,0)]
+        ds=SimpleNamespace(catalog={'device':{'model':'TEST'}},overview=lambda:{'days':rows})
+        r=build_report(ds,'2026-09-01','2026-09-09')
+        v=r['patient']['variability']
+        self.assertEqual((v['evaluable_days'],v['high_days'],v['short_days']),(7,3,1))
+        self.assertEqual(v['pattern'],'repeated')
+        self.assertEqual(r['patient']['freshness']['selected_through'],'2026-09-09')
+        self.assertEqual(r['patient']['freshness']['latest_settled'],'2026-09-10')
+        self.assertEqual(len(v['review_dates']),3)
+
+    def test_change_comparison_windows_and_export_escaping(self):
+        ds=self.treatment_periods(12,24)
+        changes=[{'id':'a','date':'2026-09-01','kind':'mask','note':'<img src=x>更换面罩'},
+                 {'id':'b','date':'2026-09-02','kind':'illness','note':'鼻塞'}]
+        r=build_report(ds,'2026-09-01','2026-09-07',changes=changes)
+        change=next(c for c in r['treatment_changes'] if c['id']=='a')
+        comp=change['comparison']
+        self.assertTrue(comp['eligible'])
+        self.assertEqual(comp['before']['start'],'2026-08-25')
+        self.assertEqual(comp['after']['end'],'2026-09-07')
+        self.assertEqual(comp['frequency_delta'],-2)
+        self.assertEqual(comp['overlapping_changes'],1)
+        self.assertIn('不代表因果',comp['text'])
+        for exported in (report_html(r),mobile_html(r)):
+            self.assertIn('更换面罩',exported)
+            self.assertIn('&lt;img',exported)
+            self.assertNotIn('<img',exported)
+            self.assertIn('2026-08-25',exported)
+
+    def test_change_with_pending_days_does_not_claim_effect(self):
+        rows=[row(f'2026-09-{n:02}',360,6) for n in range(1,9)]+[row('2026-09-09',None,30,True)]
+        ds=SimpleNamespace(catalog={'device':{'model':'TEST'}},overview=lambda:{'days':rows})
+        changes=[{'id':'a','date':'2026-09-08','kind':'clinician','note':''}]
+        r=build_report(ds,'2026-09-01','2026-09-09',changes=changes)
+        comp=r['treatment_changes'][0]['comparison']
+        self.assertFalse(comp['eligible'])
+        self.assertEqual(comp['after']['settled_days'],1)
+        self.assertIsNone(comp['frequency_delta'])
+        self.assertEqual(build_report(ds,'2026-09-01','2026-09-07',changes=changes)['treatment_changes'],[])
+
 if __name__=='__main__':unittest.main()

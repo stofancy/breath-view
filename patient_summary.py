@@ -251,6 +251,30 @@ def patient_summary(report, rows, locale='zh-CN'):
                        'frequency':sum(row['counts'].values())/(row['minutes']/60) if valid and row['minutes']>0 else None,
                        'state':'settled' if valid else 'pending' if row else 'missing'})
     last = next((r for r in reversed(rows) if not r['current'] and r['minutes'] is not None), None)
+    evaluable=[r for r in rows if p['start']<=r['date']<=p['end'] and not r['current'] and r['minutes'] is not None and r['minutes']>0]
+    high=[r for r in evaluable if sum(r['counts'].values())/(r['minutes']/60)>=5]
+    repeated=len(high)>=3 and len(high)/max(p['settled_days'],1)>=.2
+    pattern='insufficient' if not evaluable else 'repeated' if repeated else 'occasional' if high else 'none'
+    if locale == 'en-US':
+        text = (f"Among {len(evaluable)} days with a calculable event index, {len(high)} reached the event attention line."
+                if evaluable else 'This period has no settled treatment record with a calculable event index.')
+        if high:
+            text += ' It appears on multiple days and is worth reviewing together.' if repeated else ' It is concentrated on a small number of recorded days; review those first.'
+        elif evaluable:
+            text += ' No recorded day reached the attention line; still consider symptoms and treatment coverage.'
+        text += f" Of {p['settled_days']} settled days, {p['under4_days']} had less than 4 hours of treatment; four hours does not establish sufficient therapy."
+    else:
+        text=(f"可计算事件指数的 {len(evaluable)} 天中，{len(high)} 天达到事件关注线。"
+              if evaluable else '本期间没有可计算事件指数的已结算使用记录。')
+        if high:text+= '多日出现，值得一起复核。' if repeated else '集中在少数记录日，可先查看这些日期。'
+        elif evaluable:text+='未出现达到关注线的记录日，仍需结合感受和戴机情况。'
+        text+=f"已结算 {p['settled_days']} 天中，{p['under4_days']} 天戴机不足 4 小时；4 小时不代表足够治疗。"
+    review=sorted(high,key=lambda r:sum(r['counts'].values())/(r['minutes']/60),reverse=True)[:3]
+    selected=[r['date'] for r in rows if p['start']<=r['date']<=p['end'] and not r['current'] and r['minutes'] is not None]
+    variability={'settled_days':p['settled_days'],'evaluable_days':len(evaluable),'high_days':len(high),
+                 'short_days':p['under4_days'],'pattern':pattern,'text':text,'review_dates':[r['date'] for r in review]}
+    freshness={'selected_through':max(selected) if selected else None,'latest_settled':last['date'] if last else None,
+               'imported_at':report.get('imported_at')}
     questions = []
     if locale == 'en-US':
         if symptoms or c['drowsy_driving'] == 'yes':
@@ -274,6 +298,7 @@ def patient_summary(report, rows, locale='zh-CN'):
             'assessment':assessment,
             'boundary':boundary,
             'comparisons':comparisons, 'trend':points, 'glossary':glossary,
+            'variability':variability, 'freshness':freshness,
             'questions':questions[:4], 'context_labels':fields,
             'latest_settled':last['date'] if last else None,
             'coverage':coverage}

@@ -5,7 +5,7 @@ import math
 import html
 from i18n import COMPARISON_RULE_EN, CONTEXT_FIELDS_EN, QUESTIONS_EN, SOURCES_EN, normalize_locale
 
-RULE_VERSION = '2.1'
+RULE_VERSION = '2.2'
 SOURCES = [
     {'id':'NIH-LIVING','title':'NIH · 睡眠呼吸暂停随访与困倦驾驶','url':'https://www.nhlbi.nih.gov/health/sleep-apnea/living-with'},
     {'id':'NIH-AHI','title':'MedlinePlus · 睡眠监测与 AHI 的含义','url':'https://medlineplus.gov/ency/article/003932.htm'},
@@ -82,7 +82,73 @@ def minutes(value, locale='zh-CN'):
 def number(value,digits=2):return '—' if value is None else f'{value:.{digits}f}'
 
 
-def build_report(dataset,start,end,context=None,locale='zh-CN'):
+CHANGE_LABELS = {'mask':'面罩更换','clinician':'医生调整','comfort':'舒适设置',
+                 'lifestyle':'作息或体重变化','illness':'生病或鼻塞','other':'其他变化'}
+CHANGE_LABELS_EN = {'mask':'Mask replacement','clinician':'Clinician adjustment','comfort':'Comfort setting',
+                    'lifestyle':'Schedule or weight change','illness':'Illness or nasal congestion','other':'Other change'}
+
+
+def summarize_changes(rows, start, end, changes, locale='zh-CN'):
+    """Describe equal windows around a user-recorded change, without causal attribution."""
+    from patient_summary import compare
+    locale = normalize_locale(locale)
+    labels = CHANGE_LABELS_EN if locale == 'en-US' else CHANGE_LABELS
+    result=[]
+    for change in sorted(changes, key=lambda c:(c['date'],c['id']), reverse=True):
+        if not start <= change['date'] <= end:
+            continue
+        point=date.fromisoformat(change['date'])
+        before=aggregate(rows,(point-timedelta(days=7)).isoformat(),(point-timedelta(days=1)).isoformat())
+        after=aggregate(rows,point.isoformat(),(point+timedelta(days=6)).isoformat())
+        comp=compare(after,before)
+        if comp['eligible']:
+            if locale == 'en-US':
+                text=(f"Entry frequency {number(before['frequency'])} → {number(after['frequency'])} entries/hour; "
+                      f"average treatment {minutes(before['mean_minutes'], 'en-US')} → {minutes(after['mean_minutes'], 'en-US')}.")
+            else:
+                text=(f"事件指数 {number(before['frequency'])} → {number(after['frequency'])} 条目/小时；"
+                      f"平均戴机 {minutes(before['mean_minutes'])} → {minutes(after['mean_minutes'])}。")
+        else:
+            text=(f"Before: {before['settled_days']}/7 days with settled summaries; after: {after['settled_days']}/7 days. "
+                  "Compare after both windows have 7 days and a calculable event frequency."
+                  if locale == 'en-US' else
+                  f"调整前 {before['settled_days']}/7 天、调整后 {after['settled_days']}/7 天有已结算摘要；"
+                  "前后各满 7 天且可计算事件频率后再比较。")
+        overlapping=sum(other['id']!=change['id'] and before['start']<=other['date']<=after['end'] for other in changes)
+        if overlapping:
+            text += (f" There are {overlapping} other change records in the comparison window."
+                     if locale == 'en-US' else f"比较窗口内另有 {overlapping} 条变化记录。")
+        text += (' Same-period changes do not establish a causal effect.'
+                 if locale == 'en-US' else ' 同期变化不代表因果效果。')
+        result.append(dict(change,kind_label=labels.get(change['kind'], labels['other']),comparison={
+            'before':before,'after':after,'eligible':comp['eligible'],
+            'frequency_delta':comp['delta'],'minutes_delta':comp['minutes_delta'],
+            'overlapping_changes':overlapping,'text':text}))
+    return result
+
+
+def treatment_changes_html(changes, locale='zh-CN'):
+    """Shared escaped timeline content for full and phone exports."""
+    locale = normalize_locale(locale)
+    parts=[]
+    for c in changes:
+        comp=c['comparison'];before,after=comp['before'],comp['after']
+        if locale == 'en-US':
+            parts.append(f"<section><h3>{html.escape(c['date'])} · {html.escape(c['kind_label'])}</h3>"
+                         f"<p>Patient note: {html.escape(c['note'] or 'No additional note')}</p>"
+                         f"<p>Before: {before['start']} to {before['end']} ({before['settled_days']}/7 days); "
+                         f"after: {after['start']} to {after['end']} ({after['settled_days']}/7 days).</p>"
+                         f"<p>{html.escape(comp['text'])}</p></section>")
+        else:
+            parts.append(f"<section><h3>{html.escape(c['date'])} · {html.escape(c['kind_label'])}</h3>"
+                         f"<p>患者记录：{html.escape(c['note'] or '未填写补充说明')}</p>"
+                         f"<p>前期 {before['start']} 至 {before['end']}（{before['settled_days']}/7 天）；"
+                         f"后期 {after['start']} 至 {after['end']}（{after['settled_days']}/7 天）。</p>"
+                         f"<p>{html.escape(comp['text'])}</p></section>")
+    return ''.join(parts)
+
+
+def build_report(dataset,start,end,context=None,locale='zh-CN',changes=None):
     locale = normalize_locale(locale)
     lo,hi=period(start,end)
     rows=dataset.overview()['days']
@@ -97,7 +163,8 @@ def build_report(dataset,start,end,context=None,locale='zh-CN'):
     settled=[r for r in selected if r['minutes'] is not None and not r['current']]
     report={'version':RULE_VERSION,'locale':locale,'generated_at':datetime.now().isoformat(timespec='seconds'),
             'device':dataset.catalog.get('device',{}),'imported_at':dataset.catalog.get('imported_at'),
-            'current':current,'previous':previous,'context':context,'findings':findings,'sources':SOURCES}
+            'current':current,'previous':previous,'context':context,'findings':findings,'sources':SOURCES,
+            'treatment_changes':summarize_changes(rows,start,end,changes or [],locale=locale)}
     if not settled:
         finding('no_summary','无法评价这段期间的用机与事件趋势',
                 f"{length} 天中没有已结算摘要；{current['pending_days']} 天未结算，{current['missing_days']} 天无记录。",
@@ -349,6 +416,14 @@ def report_markdown(report):
     lines+=['- 平均睡眠时长：'+(str(report['context']['sleep_hours'])+' 小时' if report['context']['sleep_hours'] else '未填写')]
     # Prevent user notes becoming injected Markdown links or markup in exports.
     if report['context']['note']:lines+=['','备注（患者自述）：','',*['    '+line for line in report['context']['note'].splitlines()]]
+    if report.get('treatment_changes'):
+        lines+=['','## 治疗变化记录（患者填写）','']
+        for change in report['treatment_changes']:
+            comp=change['comparison'];before,after=comp['before'],comp['after']
+            lines.extend([f"### {change['date']} · {change['kind_label']}",'',
+                          *['    '+line for line in (change['note'] or '未填写补充说明').splitlines()],
+                          f"前期 {before['start']} 至 {before['end']}；后期 {after['start']} 至 {after['end']}。",
+                          comp['text'],''])
     lines+=['','## 优先复核日期','']
     for d in report['review_days']:lines.append(f"- {d['date']}：{'; '.join(d['reasons'])}；用机 {minutes(d['minutes'])}；事件 {number(d['frequency'])}/h；{'有' if d['wave'] else '无'}波形")
     lines+=['','## 波形复核资料（有目的的抽样，不外推整个期间）','']
@@ -386,6 +461,14 @@ def report_markdown_en(report):
     lines.append('- Average sleep time: ' + (f"{context['sleep_hours']} hours" if context['sleep_hours'] else 'Not answered'))
     if context['note']:
         lines += ['', 'Patient note:', '', *['    ' + line for line in context['note'].splitlines()]]
+    if report.get('treatment_changes'):
+        lines += ['', '## Patient-recorded treatment changes', '']
+        for change in report['treatment_changes']:
+            comp = change['comparison']; before, after = comp['before'], comp['after']
+            lines.extend([f"### {change['date']} · {change['kind_label']}", '',
+                          *['    ' + line for line in (change['note'] or 'No additional note').splitlines()],
+                          f"Before: {before['start']} to {before['end']}; after: {after['start']} to {after['end']}.",
+                          comp['text'], ''])
     lines += ['', '## Dates prioritized for review', '']
     for day in report['review_days']:
         lines.append(f"- {day['date']}: {'; '.join(day['reasons'])}; treatment {minutes(day['minutes'], 'en-US')}; events {number(day['frequency'])}/h; {'waveform available' if day['wave'] else 'no waveform'}")
@@ -431,6 +514,7 @@ def report_html(report):
 <div class="summary"><b>期间结论</b><p>{e(report['summary'])}</p></div><p class="note">基于设备解析与患者自述，尚未与原厂逐项核对。供记录复核，不作为诊断或调压处方。</p>
 <h2>期间汇总与比较</h2><p class="note">前一期间：{e(prev['start'])} 至 {e(prev['end'])}</p><table><thead><tr><th>指标</th><th>当前期间</th><th>前一期间</th></tr></thead><tbody>{comparison}</tbody></table><p class="note">{e(report['comparison']['rule'])}</p>
 <h2>患者自述（本期间）</h2><table>{context_rows}<tr><th>自报每日平均睡眠</th><td>{e(str(context['sleep_hours'])+' 小时' if context['sleep_hours'] else '未填写')}</td></tr></table><p class="self">{e(context['note'] or '无补充备注。')}</p>
+{('<h2>治疗变化记录（患者填写）</h2>'+treatment_changes_html(report['treatment_changes'])) if report.get('treatment_changes') else ''}
 <h2>观察、解释与建议</h2>{findings}
 <h2>优先复核日期</h2><p class="note">按事件条目频率、短用机记录及 CSA 条目频率筛选；排序不等于异常诊断。</p><table><thead><tr><th>日期</th><th>原因</th><th>用机</th><th>条目/h</th><th>波形</th></tr></thead><tbody>{review or '<tr><td colspan="5">无符合筛选条件的日期。</td></tr>'}</tbody></table>
 <h2>重点波形资料（最多3天）</h2>{''.join(waves) or '<p>优先日期没有可用波形。</p>'}<p class="note">压力通道沿用 OSCAR 的 BMC 旧格式解释，待原厂核验。有目的抽样不代表整个期间。记录间隔不等于觉醒；事件分钟与波形有交集不代表识别正确。</p>
@@ -468,6 +552,7 @@ def report_html_en(report):
 <div class="summary"><b>Period conclusion</b><p>{e(report['summary'])}</p></div><p class="note">Based on device parsing and patient self-report; manufacturer definitions have not been checked item by item. For record review, not diagnosis or pressure prescription.</p>
 <h2>Period summary and comparison</h2><p class="note">Adjacent period: {e(previous['start'])} to {e(previous['end'])}</p><table><thead><tr><th>Metric</th><th>Current period</th><th>Adjacent period</th></tr></thead><tbody>{comparison}</tbody></table><p class="note">{e(report['comparison']['rule'])}</p>
 <h2>Patient self-report for this period</h2><table>{context_rows}<tr><th>Average self-reported sleep</th><td>{e(context_sleep)}</td></tr></table><p class="self">{e(context['note'] or 'No additional note.')}</p>
+{('<h2>Patient-recorded treatment changes</h2>'+treatment_changes_html(report['treatment_changes'], 'en-US')) if report.get('treatment_changes') else ''}
 <h2>Observations, interpretation and next steps</h2>{findings}
 <h2>Dates prioritized for review</h2><p class="note">Selected by event-entry frequency, short treatment use and CSA entry frequency; ranking is not an abnormality diagnosis.</p><table><thead><tr><th>Date</th><th>Reason</th><th>Treatment</th><th>Entries/h</th><th>Waveform</th></tr></thead><tbody>{review or '<tr><td colspan="5">No dates matched the selection rules.</td></tr>'}</tbody></table>
 <h2>Priority waveform material (up to 3 days)</h2>{''.join(waves) or '<p>No priority date has an available waveform.</p>'}<p class="note">Purposeful sampling does not represent the whole period. A gap does not prove arousal; overlap between event minutes and waveform does not prove correct classification.</p>
