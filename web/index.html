@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>息览 · 呼吸机数据</title>
+  <link rel="icon" href="icon.svg"><link rel="stylesheet" href="style.css"><script src="app.js" defer></script><script src="report.js" defer></script>
+</head>
+<body>
+  <aside class="navigation">
+    <div class="brand"><img src="icon.svg" alt=""><strong>息览</strong><span>呼吸机数据</span></div>
+    <nav aria-label="主导航">
+      <button class="nav active" data-view="report">我的睡眠</button>
+      <button class="nav" data-view="detail">每日详情</button>
+      <button class="nav" data-view="overview">期间统计</button>
+      <button class="nav" data-view="data">数据管理</button>
+    </nav>
+    <div class="device-block"><div class="label">当前设备</div><strong id="device">未导入</strong><span id="dateCoverage"></span><span>本地数据 · 只读访问</span><button id="importNav" class="primary">导入 / 更新数据</button></div>
+  </aside>
+  <main>
+    <header class="app-header"><h1 id="title">每日详情</h1><div class="header-actions"><span id="importStamp"></span><a id="export" class="outline" href="api/export" download>导出摘要 CSV</a></div></header>
+    <div id="notice" class="notice error" role="status" hidden></div>
+    <div id="error" class="notice error" role="alert" hidden></div>
+    <section id="empty" hidden><div class="empty-state"><h2>尚未导入设备数据</h2><p>选择 BMC U-20A 的 SD 卡根目录或备份文件夹。导入后使用本地副本查看。</p><button class="primary" id="emptyImport">选择数据来源</button></div></section>
+
+    <section id="report" class="view" hidden>
+      <div class="toolbar period-toolbar"><span class="period-label">查看最近</span><div class="segmented" id="reportPeriod"><button data-days="7">7 天</button><button data-days="30" class="selected">30 天</button><button data-days="90">90 天</button></div><details class="custom-period"><summary>自选日期</summary><div class="toolbar"><input type="date" id="reportStart" aria-label="分析开始日期"><span>至</span><input type="date" id="reportEnd" aria-label="分析结束日期"><button id="generateReport" class="outline">应用</button></div></details><button id="openExport" class="primary">带去看医生 · 导出</button></div>
+      <div id="reportStatus" class="status-line" role="status"></div>
+      <div id="reportContent" hidden>
+        <article class="patient-lead panel"><div class="eyebrow" id="patientPeriod"></div><h2 id="patientTitle"></h2><p id="patientDetail"></p><div class="patient-boundary"><span id="patientBoundary"></span><button class="term-help" data-term="assessment" aria-label="了解初步判断的把握程度">?</button></div><details class="assessment-why"><summary>为什么这样判断</summary><ul id="assessmentReasons"></ul><p id="assessmentConfidence" class="small-note"></p></details></article>
+        <div class="patient-metrics" id="patientMetrics"></div>
+        <div class="patient-middle">
+          <article class="panel patient-trend"><div class="panel-heading"><h2>比以前怎样 <button class="term-help" data-term="comparison" aria-label="了解比较方法">?</button></h2><div class="segmented" id="patientCompare"><button data-compare="previous" class="selected">比前期</button><button data-compare="year">去年同期</button></div></div><div id="patientChange"></div><div id="patientChart"></div><p class="small-note">每日呼吸事件记录 / 小时 · 点击图中的日期可查看详情</p><details class="trend-values"><summary>查看每日数字</summary><div class="table-scroll" id="patientTrendTable"></div></details></article>
+          <article class="panel followup-panel" id="patientFollowup" aria-live="polite"></article>
+        </div>
+      </div>
+      <details class="panel context-panel" id="contextPanel"><summary><strong>补充我的感受</strong><span id="contextPreview">约 1 分钟，帮助判断下一步</span></summary><p class="small-note" id="contextPeriod"></p><form id="contextForm"><div class="context-grid" id="contextFields"></div><label class="context-note">想让医生知道的事：作息、面罩更换、治疗调整的日期等<textarea id="patientNote" maxlength="2000" rows="3" placeholder="可选，保存在当前服务"></textarea></label><div class="toolbar"><button id="saveContext" type="submit" class="primary">保存并更新建议</button><button id="discardContext" type="button" class="outline" hidden>撤销未保存修改</button><span id="contextStatus" class="small-note" role="status"></span></div></form></details>
+      <details class="panel" id="professionalDetails"><summary><strong>更多分析与医生参考</strong><span>事件分类、重点日期、波形与完整依据</span></summary>
+        <div class="professional-body"><h2>呼吸事件分类 <button class="term-help" data-term="frequency" aria-label="了解事件计数">?</button></h2><div id="patientTypes" class="patient-types"></div>
+        <details class="analysis-detail"><summary>期间汇总与比较</summary><p id="reportSummary"></p><div id="reportComparison"></div></details>
+        <details class="analysis-detail"><summary>详细解释与下一步</summary><div id="reportFindings"></div></details>
+        <details class="analysis-detail"><summary>值得复核的日期与波形</summary><div class="table-scroll"><table><thead><tr><th>日期</th><th>筛选原因</th><th>使用时长</th><th>事件条目/h</th><th>波形</th></tr></thead><tbody id="reportDays"></tbody></table></div><div id="reportWaves"></div></details>
+        <details class="analysis-detail"><summary>复诊时可以问医生</summary><ol id="reportQuestions"></ol></details>
+        <details class="analysis-detail report-method"><summary>术语、分析规则与来源</summary><div id="patientGlossary"></div><h3>方向性判断的具体规则</h3><ul id="assessmentRules"></ul><p id="comparisonRule"></p><ul id="reportSources"></ul><p>波形只复核筛选出的最多 3 个日期，不外推整个期间。少于 4 小时只作时长分档，不表示 4 小时就足够治疗。</p></details>
+        <a id="reportDownload" class="outline" download>下载完整医生参考（HTML）</a></div>
+      </details>
+      <div id="patientCoverage" class="small-note"></div>
+    </section>
+
+    <section id="detail" class="view" hidden>
+      <div class="date-toolbar toolbar">
+        <label for="date">治疗日</label><button id="prev" class="outline" aria-label="前一个治疗日">←</button>
+        <input type="date" id="date" aria-label="治疗日"><button id="next" class="outline" aria-label="后一个治疗日">→</button>
+        <button id="latest" class="outline">最近有波形日</button><span id="dayState" class="badge"></span>
+        <span class="toolbar-note">当日 12:00 至次日 12:00 · 设备时钟</span>
+      </div>
+      <div id="dayMetrics" class="metrics"></div>
+      <div id="waveNotice" class="status-line"></div>
+      <div id="detailBody" class="detail-layout">
+        <div class="wave-workspace panel">
+          <div class="wave-toolbar toolbar">
+            <strong>波形</strong><div class="segmented" id="zoom"><button data-window="30">30 秒</button><button data-window="300">5 分钟</button><button data-window="1800">30 分钟</button><button data-window="all" class="selected">全部记录</button></div>
+            <label class="check"><input type="checkbox" id="advanced">通气指标</label>
+          </div>
+          <div class="time-nav"><button id="panLeft" class="outline" aria-label="向前平移">←</button><input id="pan" type="range" min="0" max="86400" value="0" aria-label="时间窗口位置"><button id="panRight" class="outline" aria-label="向后平移">→</button><strong id="windowLabel"></strong></div>
+          <div class="segment-line"><span>连续记录段</span><div id="segments"></div></div>
+          <div class="event-timeline"><div class="lane-labels"><span>OSA</span><span>CSA</span><span>HYP</span></div><div id="timeline"></div></div>
+          <div id="charts"></div>
+          <div id="noWave" class="empty-state" hidden>没有保留波形。可查看右侧的历史事件记录。</div>
+          <div class="workspace-help"><span id="sampleHint">概览保留极值抽样</span><span>拖拽：放大区间 · 双击：全部记录 · ← →：平移</span></div>
+          <details class="channel-notes"><summary>通道定义与数据精度</summary><p>吸气压力 IPAP 与呼气压力 EPAP 按 OSCAR 的 BMC 旧格式分别展示，尚未与原厂软件逐项核验；此前的单一压力图是 EPAP 通道。流量为设备原始通道，未扣除基线。漏气通道是否扣除面罩正常排气尚未确认。事件阴影覆盖其记录所在的一分钟，不是精确的事件起止时间。曲线空白表示无有效记录。</p></details>
+        </div>
+        <div class="inspector">
+          <section class="panel"><h2>波形统计 <span>全部保留记录</span></h2><table class="stats-table"><thead><tr><th>通道</th><th>中位数</th><th>P95 <button class="term-help" data-term="p95" aria-label="解释 P95">?</button></th></tr></thead><tbody id="stats"></tbody></table><p class="small-note">P95：95% 的保留采样值不超过此值。仅统计有数据的时段。</p></section>
+          <section class="panel event-panel"><h2>事件记录 <span id="eventCount"></span></h2><div id="eventFilters" class="segmented"><button data-kind="all" class="selected">全部</button><button data-kind="OSA" title="阻塞性呼吸暂停">OSA</button><button data-kind="CSA" title="中枢性呼吸暂停">CSA</button><button data-kind="HYP" title="低通气">HYP</button></div><div class="event-key"><span class="OSA" data-term="OSA" tabindex="0">OSA 阻塞性暂停</span><span class="CSA" data-term="CSA" tabindex="0">CSA 中枢性暂停</span><span class="HYP" data-term="HYP" tabindex="0">HYP 低通气</span></div><div class="event-scroll"><table><thead><tr><th>记录时间</th><th>类型</th><th>秒数¹</th></tr></thead><tbody id="eventList"></tbody></table></div><p class="small-note">点击记录定位附近 5 分钟。<br>¹ 时间精度为分钟；秒数可能是该分钟内累计值。</p></section>
+        </div>
+      </div>
+    </section>
+
+    <section id="overview" class="view" hidden>
+      <div class="toolbar period-toolbar"><label for="rangeStart">统计期间</label><input type="date" id="rangeStart" aria-label="统计开始日期"><span>至</span><input type="date" id="rangeEnd" aria-label="统计结束日期"><button id="applyRange" class="outline">应用</button><div class="segmented" id="period"><button data-days="7">7 天</button><button data-days="30" class="selected">30 天</button><button data-days="90">90 天</button><button data-days="0">全部</button></div></div>
+      <div id="metrics" class="metrics"></div>
+      <div id="coverage" class="status-line"></div>
+      <article class="panel trend-panel"><h2>使用时长 <span>小时 / 治疗日</span></h2><canvas id="usage" height="160" aria-label="使用时长趋势图"></canvas><div class="chart-caption"><span>点击柱形打开每日详情</span><span class="legend"><i class="missing"></i>无摘要 <i class="pending"></i>未结算</span></div></article>
+      <article class="panel trend-panel"><h2>事件记录频率 <span>条目 / 使用小时 · 估算</span></h2><canvas id="eventsTrend" height="125" aria-label="事件记录频率趋势图"></canvas><p class="small-note">按 OSA、CSA、HYP 记录条目数除以设备使用小时数计算，尚未确认等同于原厂 AHI。</p></article>
+      <article class="panel record-panel"><div class="panel-heading"><h2>每日记录 <span id="rangeText"></span></h2><div class="record-controls"><label><input type="checkbox" id="onlyWave">仅显示有波形日</label><input id="search" type="search" placeholder="筛选日期" aria-label="筛选日期"></div></div><div class="table-scroll"><table><thead><tr><th>治疗日</th><th>设备使用时长</th><th>事件条目 /h</th><th title="阻塞性呼吸暂停记录条目">OSA</th><th title="中枢性呼吸暂停记录条目">CSA</th><th title="低通气记录条目">HYP</th><th>数据状态</th><th></th></tr></thead><tbody id="rows"></tbody></table></div><div class="pagination"><span id="rowCount"></span><button id="more" class="outline">加载更多</button></div></article>
+    </section>
+
+    <section id="data" class="view" hidden>
+      <article class="panel prose"><div class="panel-heading"><h2>当前数据集</h2><button id="dataImport" class="primary">导入 / 更新数据</button></div><dl id="dataInfo"></dl><details><summary>文件读取异常明细</summary><div id="readErrors"></div></details></article>
+      <article class="panel prose"><h2>指标定义与验证状态</h2><dl>
+        <dt>适用设备</dt><dd>BMC U-20A。解析依据公开的 BmcCpapData 格式研究，已验证本卡数据结构；尚未与原厂软件逐项核对。</dd>
+        <dt>治疗日</dt><dd>当日 12:00 至次日 12:00。保留设备时钟，不自动转换时区。</dd>
+        <dt>设备使用时长</dt><dd>直接读取历史摘要的分钟数。当前未归档日显示“未结算”。波形时长只表示保留的有效数据，不替代摘要时长。</dd>
+        <dt>期间平均使用</dt><dd>总使用分钟数除以有已结算摘要的天数。缺失摘要不计作零使用；界面分别显示记录天数、缺失天数与未结算天数。</dd>
+        <dt>事件记录频率</dt><dd>OSA、CSA、HYP 条目数除以已结算的使用小时数。事件及摘要时长已与 OSCAR 底层解析交叉核对；事件时间精确到分钟，原厂 AHI 计算口径仍可能不同，不据此自动评级。</dd>
+        <dt>事件时间与秒数</dt><dd>原始时间精确到分钟。秒数可能是分钟内累计值，不表示确定的单次事件持续时间。显示一分钟阴影供定位。</dd>
+        <dt>压力与流量</dt><dd>压力为已解析的设备压力通道；流量为原始通道，未扣除基线。概览保留极值抽样，30 秒窗口显示全部 25 Hz 流量采样。光标读数对应附近显示点。</dd>
+        <dt>漏气与通气指标</dt><dd>漏气是否扣除面罩排气尚未确认，不使用通用警戒线。潮气量、分钟通气量与呼吸频率为设备估计值。</dd>
+        <dt>数据缺口</dt><dd>循环覆盖、未保存或读取失败均可能导致波形缺失。按每个数据包时间归档，缺口断开显示；重复时间戳去重并报告，不插值填补。</dd>
+        <dt>尚未解析</dt><dd>血氧、睡眠分期、鼾声、设备设置；不显示推测值。本版本不使用 .idx、.evt、.log 文件。</dd>
+      </dl></article>
+      <article class="panel prose"><h2>存储与导出</h2><p>只读访问来源文件夹，摘要与编号波形保存到当前服务。每次导入保留独立快照，当前界面显示最新快照；失败导入不替换已有数据。CSV 导出遵循当前页面的日期范围：每日详情导出当天，期间统计导出所选期间，数据管理导出全部摘要。未结算或缺失数值留空。</p></article>
+    </section>
+    <footer><span id="statusText">未导入数据</span><span>设备时钟 · 治疗日从 12:00 起</span></footer>
+  </main>
+  <dialog id="importDialog"><form id="importForm"><div class="panel-heading"><h2>导入设备数据</h2><button type="button" id="closeDialog" class="outline" aria-label="关闭">关闭</button></div><p>将 SD 卡中的 .USR 和同名编号文件一起压缩为 ZIP，选择后上传。支持外层文件夹；每个压缩包只能包含一台设备的一份数据。</p><label for="archiveFile">选择 ZIP 压缩包（最大 8 GiB）</label><input type="file" id="archiveFile" accept=".zip,application/zip"><div id="localSource" hidden><label for="sourcePath">或使用桌面顶部选择文件夹 / .USR / ZIP</label><input id="sourcePath" readonly placeholder="通过桌面工具栏选择"></div><p class="small-note">更新请上传完整备份。最新快照替换当前视图，旧快照和已保存自述保留；只有 .USR 时不包含波形。上传期间请保持页面打开。</p><div id="importProgress" role="status"></div><div class="dialog-actions"><button type="submit" id="startImport" class="primary">开始导入</button></div></form></dialog>
+  <dialog id="exportDialog" class="export-dialog"><div class="panel-heading"><h2>带去看医生</h2><button id="closeExport" class="outline">关闭</button></div><p id="exportPeriod"></p><p>包含本期变化、已保存的感受、复诊问题和数据来源。文件可离线查看，发到手机后即可随身携带。</p><div class="export-options"><a id="mobilePdf" class="primary" download>下载手机 PDF</a><a id="mobileHtml" class="outline" download>下载离线网页</a></div><p id="exportStatus" role="status"></p><p class="small-note">PDF 为手机窄版。离线网页支持展开详情；在手机浏览器中打开。两种文件都包含你的健康记录。</p></dialog>
+  <div id="termTooltip" class="term-tooltip" role="tooltip" hidden></div>
+  <div id="tooltip" class="tooltip" hidden></div>
+</body>
+</html>

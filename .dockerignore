@@ -1,0 +1,11 @@
+*
+!Dockerfile
+!requirements.txt
+!app.py
+!storage.py
+!reader.py
+!analysis_report.py
+!patient_summary.py
+!portable_report.py
+!web/
+!web/**
