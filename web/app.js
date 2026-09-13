@@ -370,7 +370,7 @@ function redraw() {
 function renderInfo() {
   const waves=overview.days.filter(day=>day.wave);
   const errors=overview.files.flatMap(file=>(file.unreadable_ranges||[]).map(range=>`${file.name}：文件偏移 ${range[0].toLocaleString()}，跳过 ${range[1].toLocaleString()} 字节`));
-  const fields=[['设备',overview.device.model],['序列号',overview.device.serial],['记录范围',`${overview.days[0].date} — ${overview.days.at(-1).date}`],['有保留波形',waves.length?`${waves.length} 天（${waves[0].date} — ${waves.at(-1).date}，非连续）`:'无'],['导入时间',overview.imported_at.replace('T',' ')],['来源目录',overview.source],['本地存储','~/.local/share/breath-view/'],['本地文件',`${overview.files.length} 个文件，${fmt(overview.files.reduce((sum,file)=>sum+file.size,0)/1024/1024)} MiB`],['无效数据包',`${overview.invalid_packets.toLocaleString()} 个（含未使用空间与不可读区间）`],['读取异常',errors.length?`${errors.length} 个不可读区间；见下方明细`:'无']];
+  const fields=[['设备',overview.device.model],['序列号',overview.device.serial],['记录范围',`${overview.days[0].date} — ${overview.days.at(-1).date}`],['有保留波形',waves.length?`${waves.length} 天（${waves[0].date} — ${waves.at(-1).date}，非连续）`:'无'],['导入时间',overview.imported_at.replace('T',' ')],['导入来源',overview.source],['存储位置','当前服务的数据目录（桌面电脑或 NAS）'],['快照文件',`${overview.files.length} 个文件，${fmt(overview.files.reduce((sum,file)=>sum+file.size,0)/1024/1024)} MiB`],['无效数据包',`${overview.invalid_packets.toLocaleString()} 个（含未使用空间与不可读区间）`],['读取异常',errors.length?`${errors.length} 个不可读区间；见下方明细`:'无']];
   $('#dataInfo').innerHTML=fields.map(([key,value])=>`<dt>${key}</dt><dd>${escape(value)}</dd>`).join('');
   $('#readErrors').innerHTML=errors.length?errors.map(escape).join('<br>'):'未发现文件读取异常。';
 }
