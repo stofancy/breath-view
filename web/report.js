@@ -194,7 +194,7 @@ function renderPreviousContext(){
   box.hidden=false;
   box.innerHTML=`<div class="previous-context-copy"><strong>上次感受</strong><span>来源期 ${escape(previous.start||'—')} 至 ${escape(previous.end||'—')} · 保存于 ${escape(previous.saved_at?formatStamp(previous.saved_at):'未记录')}</span></div><div class="previous-context-actions"><button type="button" class="outline" id="loadPreviousContext">载入上次感受</button><label><input type="checkbox" id="includePreviousNote">同时带入上次备注</label></div>`;
   $('#loadPreviousContext').onclick=()=>{
-    const prior=previous.context||{},loaded={sleep_hours:normalizeSleepHours(prior.sleep_hours),note:$('#includePreviousNote').checked?(prior.note||''):''};
+    const prior=previous.context||{},includeNote=$('#includePreviousNote').checked,loaded={sleep_hours:normalizeSleepHours(prior.sleep_hours),note:includeNote?(prior.note||''):$('#patientNote').value};
     Object.keys(contextNames).forEach(key=>loaded[key]=prior[key]??'unknown');
     contextDrafts.set(contextKey(),loaded);renderContext();$('#contextStatus').textContent='已载入上次感受；请逐项确认后点击“保存并更新建议”。';
   };
