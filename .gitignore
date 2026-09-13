@@ -1,0 +1,10 @@
+__pycache__/
+.venv/
+*.USR
+*.usr
+*.idx
+*.evt
+*.log
+*.0??
+*.csv
+catalog.json
