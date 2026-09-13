@@ -4,7 +4,7 @@ from statistics import median
 import math
 import html
 
-RULE_VERSION = '2.1'
+RULE_VERSION = '2.2'
 SOURCES = [
     {'id':'NIH-LIVING','title':'NIH · 睡眠呼吸暂停随访与困倦驾驶','url':'https://www.nhlbi.nih.gov/health/sleep-apnea/living-with'},
     {'id':'NIH-AHI','title':'MedlinePlus · 睡眠监测与 AHI 的含义','url':'https://medlineplus.gov/ency/article/003932.htm'},
@@ -81,7 +81,50 @@ def minutes(value):
 def number(value,digits=2):return '—' if value is None else f'{value:.{digits}f}'
 
 
-def build_report(dataset,start,end,context=None):
+CHANGE_LABELS = {'mask':'面罩更换','clinician':'医生调整','comfort':'舒适设置',
+                 'lifestyle':'作息或体重变化','illness':'生病或鼻塞','other':'其他变化'}
+
+
+def summarize_changes(rows, start, end, changes):
+    """Describe equal windows around a user-recorded change, without causal attribution."""
+    from patient_summary import compare
+    result=[]
+    for change in sorted(changes, key=lambda c:(c['date'],c['id']), reverse=True):
+        if not start <= change['date'] <= end:
+            continue
+        point=date.fromisoformat(change['date'])
+        before=aggregate(rows,(point-timedelta(days=7)).isoformat(),(point-timedelta(days=1)).isoformat())
+        after=aggregate(rows,point.isoformat(),(point+timedelta(days=6)).isoformat())
+        comp=compare(after,before)
+        if comp['eligible']:
+            text=(f"事件指数 {number(before['frequency'])} → {number(after['frequency'])} 条目/小时；"
+                  f"平均戴机 {minutes(before['mean_minutes'])} → {minutes(after['mean_minutes'])}。")
+        else:
+            text=(f"调整前 {before['settled_days']}/7 天、调整后 {after['settled_days']}/7 天有已结算摘要；"
+                  "前后各满 7 天且可计算事件频率后再比较。")
+        overlapping=sum(other['id']!=change['id'] and before['start']<=other['date']<=after['end'] for other in changes)
+        if overlapping:text+=f"比较窗口内另有 {overlapping} 条变化记录。"
+        result.append(dict(change,kind_label=CHANGE_LABELS.get(change['kind'],'其他变化'),comparison={
+            'before':before,'after':after,'eligible':comp['eligible'],
+            'frequency_delta':comp['delta'],'minutes_delta':comp['minutes_delta'],
+            'overlapping_changes':overlapping,'text':text+' 同期变化不代表因果效果。'}))
+    return result
+
+
+def treatment_changes_html(changes):
+    """Shared escaped timeline content for full and phone exports."""
+    parts=[]
+    for c in changes:
+        comp=c['comparison'];before,after=comp['before'],comp['after']
+        parts.append(f"<section><h3>{html.escape(c['date'])} · {html.escape(c['kind_label'])}</h3>"
+                     f"<p>患者记录：{html.escape(c['note'] or '未填写补充说明')}</p>"
+                     f"<p>前期 {before['start']} 至 {before['end']}（{before['settled_days']}/7 天）；"
+                     f"后期 {after['start']} 至 {after['end']}（{after['settled_days']}/7 天）。</p>"
+                     f"<p>{html.escape(comp['text'])}</p></section>")
+    return ''.join(parts)
+
+
+def build_report(dataset,start,end,context=None,changes=None):
     lo,hi=period(start,end)
     rows=dataset.overview()['days']
     current=aggregate(rows,start,end)
@@ -95,7 +138,8 @@ def build_report(dataset,start,end,context=None):
     settled=[r for r in selected if r['minutes'] is not None and not r['current']]
     report={'version':RULE_VERSION,'generated_at':datetime.now().isoformat(timespec='seconds'),
             'device':dataset.catalog.get('device',{}),'imported_at':dataset.catalog.get('imported_at'),
-            'current':current,'previous':previous,'context':context,'findings':findings,'sources':SOURCES}
+            'current':current,'previous':previous,'context':context,'findings':findings,'sources':SOURCES,
+            'treatment_changes':summarize_changes(rows,start,end,changes or [])}
     if not settled:
         finding('no_summary','无法评价这段期间的用机与事件趋势',
                 f"{length} 天中没有已结算摘要；{current['pending_days']} 天未结算，{current['missing_days']} 天无记录。",
@@ -232,6 +276,14 @@ def report_markdown(report):
     lines+=['- 平均睡眠时长：'+(str(report['context']['sleep_hours'])+' 小时' if report['context']['sleep_hours'] else '未填写')]
     # Prevent user notes becoming injected Markdown links or markup in exports.
     if report['context']['note']:lines+=['','备注（患者自述）：','',*['    '+line for line in report['context']['note'].splitlines()]]
+    if report.get('treatment_changes'):
+        lines+=['','## 治疗变化记录（患者填写）','']
+        for change in report['treatment_changes']:
+            comp=change['comparison'];before,after=comp['before'],comp['after']
+            lines.extend([f"### {change['date']} · {change['kind_label']}",'',
+                          *['    '+line for line in (change['note'] or '未填写补充说明').splitlines()],
+                          f"前期 {before['start']} 至 {before['end']}；后期 {after['start']} 至 {after['end']}。",
+                          comp['text'],''])
     lines+=['','## 优先复核日期','']
     for d in report['review_days']:lines.append(f"- {d['date']}：{'; '.join(d['reasons'])}；用机 {minutes(d['minutes'])}；事件 {number(d['frequency'])}/h；{'有' if d['wave'] else '无'}波形")
     lines+=['','## 波形复核资料（有目的的抽样，不外推整个期间）','']
@@ -271,6 +323,7 @@ def report_html(report):
 <div class="summary"><b>期间结论</b><p>{e(report['summary'])}</p></div><p class="note">基于设备解析与患者自述，尚未与原厂逐项核对。供记录复核，不作为诊断或调压处方。</p>
 <h2>期间汇总与比较</h2><p class="note">前一期间：{e(prev['start'])} 至 {e(prev['end'])}</p><table><thead><tr><th>指标</th><th>当前期间</th><th>前一期间</th></tr></thead><tbody>{comparison}</tbody></table><p class="note">{e(report['comparison']['rule'])}</p>
 <h2>患者自述（本期间）</h2><table>{context_rows}<tr><th>自报每日平均睡眠</th><td>{e(str(context['sleep_hours'])+' 小时' if context['sleep_hours'] else '未填写')}</td></tr></table><p class="self">{e(context['note'] or '无补充备注。')}</p>
+{('<h2>治疗变化记录（患者填写）</h2>'+treatment_changes_html(report['treatment_changes'])) if report.get('treatment_changes') else ''}
 <h2>观察、解释与建议</h2>{findings}
 <h2>优先复核日期</h2><p class="note">按事件条目频率、短用机记录及 CSA 条目频率筛选；排序不等于异常诊断。</p><table><thead><tr><th>日期</th><th>原因</th><th>用机</th><th>条目/h</th><th>波形</th></tr></thead><tbody>{review or '<tr><td colspan="5">无符合筛选条件的日期。</td></tr>'}</tbody></table>
 <h2>重点波形资料（最多3天）</h2>{''.join(waves) or '<p>优先日期没有可用波形。</p>'}<p class="note">压力通道沿用 OSCAR 的 BMC 旧格式解释，待原厂核验。有目的抽样不代表整个期间。记录间隔不等于觉醒；事件分钟与波形有交集不代表识别正确。</p>

@@ -164,6 +164,21 @@ def patient_summary(report, rows):
                        'frequency':sum(row['counts'].values())/(row['minutes']/60) if valid and row['minutes']>0 else None,
                        'state':'settled' if valid else 'pending' if row else 'missing'})
     last = next((r for r in reversed(rows) if not r['current'] and r['minutes'] is not None), None)
+    evaluable=[r for r in rows if p['start']<=r['date']<=p['end'] and not r['current'] and r['minutes'] is not None and r['minutes']>0]
+    high=[r for r in evaluable if sum(r['counts'].values())/(r['minutes']/60)>=5]
+    repeated=len(high)>=3 and len(high)/max(p['settled_days'],1)>=.2
+    pattern='insufficient' if not evaluable else 'repeated' if repeated else 'occasional' if high else 'none'
+    text=(f"可计算事件指数的 {len(evaluable)} 天中，{len(high)} 天达到事件关注线。"
+          if evaluable else '本期间没有可计算事件指数的已结算使用记录。')
+    if high:text+= '多日出现，值得一起复核。' if repeated else '集中在少数记录日，可先查看这些日期。'
+    elif evaluable:text+='未出现达到关注线的记录日，仍需结合感受和戴机情况。'
+    text+=f"已结算 {p['settled_days']} 天中，{p['under4_days']} 天戴机不足 4 小时；4 小时不代表足够治疗。"
+    review=sorted(high,key=lambda r:sum(r['counts'].values())/(r['minutes']/60),reverse=True)[:3]
+    selected=[r['date'] for r in rows if p['start']<=r['date']<=p['end'] and not r['current'] and r['minutes'] is not None]
+    variability={'settled_days':p['settled_days'],'evaluable_days':len(evaluable),'high_days':len(high),
+                 'short_days':p['under4_days'],'pattern':pattern,'text':text,'review_dates':[r['date'] for r in review]}
+    freshness={'selected_through':max(selected) if selected else None,'latest_settled':last['date'] if last else None,
+               'imported_at':report.get('imported_at')}
     questions = []
     if symptoms or c['drowsy_driving']=='yes': questions.append('我仍有这些不适：'+'、'.join(symptoms+([CONTEXT_FIELDS['drowsy_driving']] if c['drowsy_driving']=='yes' else []))+'。是否需要进一步评估？')
     if c['mask_problem']=='yes' or c['mask_off']=='yes': questions.append('不适或摘机影响整夜使用，应该怎样处理？')
@@ -173,6 +188,7 @@ def patient_summary(report, rows):
             'assessment':assessment,
             'boundary':'初步评估 · '+assessment['confidence']+' · '+('已结合本期自述' if any(c[k]!='unknown' for k in CONTEXT_FIELDS) else '以设备记录为主，可补充睡醒感受'),
             'comparisons':comparisons, 'trend':points, 'glossary':GLOSSARY,
+            'variability':variability,'freshness':freshness,
             'questions':questions[:4], 'context_labels':CONTEXT_FIELDS,
             'latest_settled':last['date'] if last else None,
             'coverage':f"{p['calendar_days']} 天中，{p['settled_days']} 天可计算，{p['pending_days']} 天未结算，{p['missing_days']} 天缺记录；{p['wave_days']} 天有波形。"}
